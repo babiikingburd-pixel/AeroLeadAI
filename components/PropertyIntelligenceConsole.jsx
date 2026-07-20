@@ -268,7 +268,13 @@ export default function PropertyIntelligenceConsole() {
   const fileRefs = { roof: useRef(null), tree: useRef(null), driveway: useRef(null) };
 
   useEffect(() => {
-    if (!supabase) { setAuthChecked(true); return; }
+    if (!supabase) {
+      // Password-gate path: remember a successful login across reloads/sessions
+      // instead of asking for the code every time.
+      try { if (localStorage.getItem("propintel:passwordAuthed") === "1") setLoggedIn(true); } catch {}
+      setAuthChecked(true);
+      return;
+    }
     supabase.auth.getSession().then(({ data }) => {
       if (data?.session) setLoggedIn(true);
       setAuthChecked(true);
@@ -278,6 +284,23 @@ export default function PropertyIntelligenceConsole() {
     });
     return () => sub?.subscription?.unsubscribe();
   }, []);
+
+  function unlockWithPassword() {
+    if (passwordInput === ACCESS_PASSWORD) {
+      try { localStorage.setItem("propintel:passwordAuthed", "1"); } catch {}
+      setLoggedIn(true);
+      setLoginError(false);
+    } else {
+      setLoginError(true);
+    }
+  }
+
+  function logOut() {
+    try { localStorage.removeItem("propintel:passwordAuthed"); } catch {}
+    if (supabase) supabase.auth.signOut();
+    setLoggedIn(false);
+    setPasswordInput("");
+  }
 
   async function sendMagicLink() {
     if (!magicEmail || !supabase) return;
@@ -835,12 +858,12 @@ export default function PropertyIntelligenceConsole() {
                 type="password"
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && (passwordInput === ACCESS_PASSWORD ? setLoggedIn(true) : setLoginError(true))}
+                onKeyDown={(e) => e.key === "Enter" && unlockWithPassword()}
                 placeholder="Access code"
                 style={{ width: "100%", padding: 12, margin: "10px 0", background: PANEL2, border: `1px solid ${LINE}`, color: "#dfe6ee", borderRadius: 8, boxSizing: "border-box" }}
               />
               <button
-                onClick={() => (passwordInput === ACCESS_PASSWORD ? setLoggedIn(true) : setLoginError(true))}
+                onClick={unlockWithPassword}
                 style={{ width: "100%", padding: 12, background: AMBER, color: "#1a1200", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}
               >
                 Enter
@@ -860,7 +883,10 @@ export default function PropertyIntelligenceConsole() {
           <div style={{ fontSize: 12, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI // MISSION CONTROL</div>
           <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>Property Intelligence</div>
         </div>
-        <a href="/batch" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Mass Upload / Batch pipeline →</a>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <a href="/batch" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Mass Upload / Batch pipeline →</a>
+          <button onClick={logOut} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: MUTE, fontSize: 13, cursor: "pointer" }}>Log out</button>
+        </div>
       </div>
 
       <div style={{ padding: 20, borderBottom: `1px solid ${LINE}` }}>
