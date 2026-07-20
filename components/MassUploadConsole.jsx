@@ -390,6 +390,7 @@ export default function MassUploadConsole() {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <a href="/map" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: GREEN, fontSize: 13, textDecoration: "none" }}>🗺 View map</a>
+          <a href="/autonomous" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: AMBER, fontSize: 13, textDecoration: "none" }}>🛰️ Autonomous scan</a>
           <a href="/" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Deep-dive console →</a>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: autoRun ? GREEN : MUTE, cursor: "pointer", border: `1px solid ${autoRun ? GREEN : LINE}`, borderRadius: 6, padding: "8px 12px" }}>
             <input type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} style={{ margin: 0 }} />
