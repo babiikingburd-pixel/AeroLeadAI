@@ -465,17 +465,19 @@ export default function PropertyIntelligenceConsole() {
 
       // 4. Damage scoring on the fetched tile (skipped if deprioritized — no
       //    point spending vision tokens on a lead the 10-year rule already sank)
+      // findingsScore is a health score (higher = fewer concerns) — inverse of
+      // the raw damage/concern score — to match the deep-dive console's
+      // GREEN/AMBER/SIGNAL display convention (see runFullScan below).
       let findingsScore = null, aiFindings = [];
       if (roofImage && !lowPriority) {
         try {
           const base64 = roofImage.dataUrl.split(",")[1];
-          const { finding, runs } = await runAnalystAveraged("roof", base64, roofImage.mediaType, address);
-          findingsScore = finding.concern_score;
+          const { finding, runs } = await runAnalystAveraged("roof", [{ base64Image: base64, mediaType: roofImage.mediaType }], address);
+          findingsScore = Math.max(0, 100 - finding.concern_score);
           aiFindings = [{ id: uid(), at: nowIso(), results: { roof: finding }, findingsScore, source: `batch auto-scan (${runs} run${runs > 1 ? "s" : ""}, ${finding.provider})` }];
-          logBatch(`   damage score ${findingsScore} (${finding.level})`);
+          logBatch(`   damage score ${finding.concern_score} (${finding.level})`);
         } catch (e) { needsHuman.push("scoring"); logBatch(`   ⚠ scoring failed: ${e.message}`); }
       } else if (lowPriority) {
-        findingsScore = 0;
         logBatch(`   scoring skipped — deprioritized by permit rule`);
       }
 

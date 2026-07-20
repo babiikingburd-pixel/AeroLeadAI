@@ -120,10 +120,13 @@ export default function MassUploadConsole() {
           drone: [], street: [], historical: [], weather: [],
           permits: it.permitNotes && it.permitNotes !== "Not checked" ? [{ id: uid(), text: `[From batch] ${it.permitNotes}`, at: nowIso() }] : [],
           inspectionReports: [], contractorNotes: [],
-          aiFindings: it.damageScore !== null ? [{ id: uid(), at: nowIso(), results: [{ domain: "roof", concern_score: it.damageScore, notes: it.damageNotes }], findingsScore: it.damageScore }] : [],
+          aiFindings: it.damageScore !== null ? [{ id: uid(), at: nowIso(), results: [{ domain: "roof", concern_score: it.damageScore, notes: it.damageNotes }], findingsScore: Math.max(0, 100 - it.damageScore) }] : [],
           repairs: [], timeline: [{ id: uid(), at: nowIso(), text: "Promoted from batch pipeline" }],
         },
-        findingsScore: it.damageScore, suggestedActions: [],
+        // findingsScore is a health score (higher = fewer concerns) — inverse of
+        // the raw damage/concern score — to match the deep-dive console's
+        // GREEN/AMBER/SIGNAL display convention (see runFullScan).
+        findingsScore: it.damageScore !== null ? Math.max(0, 100 - it.damageScore) : null, suggestedActions: [],
       };
       localStorage.setItem("propintel:properties", JSON.stringify(props));
       upsert({ ...it, log: [...it.log, "Promoted to deep-dive console"] });

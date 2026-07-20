@@ -46,7 +46,7 @@ out center ${max * 3};`;
 
   const data = await runOverpassQuery(query);
   if (!data) {
-    return Response.json({ ok: false, error: "Address lookup service unavailable — try again shortly.", debug: "Overpass API unreachable on all mirrors." });
+    return Response.json({ ok: false, error: "Address lookup service unavailable — try again shortly.", debug: ["Overpass API unreachable on all mirrors."] });
   }
 
   const seen = new Set();
@@ -73,7 +73,7 @@ out center ${max * 3};`;
   }
 
   if (addresses.length === 0) {
-    return Response.json({ ok: false, error: "No addressed buildings found for this ZIP in OpenStreetMap.", debug: `0 usable elements for addr:postcode=${zip}` });
+    return Response.json({ ok: false, error: "No addressed buildings found for this ZIP in OpenStreetMap.", debug: [`0 usable elements for addr:postcode=${zip}`, `${(data.elements || []).length} raw element(s) returned before filtering`] });
   }
 
   return Response.json({ ok: true, zip, city, state, count: addresses.length, addresses });
