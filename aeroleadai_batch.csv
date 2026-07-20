@@ -1,0 +1,3 @@
+tier,address,lat,lon,damage_score,permit_within_10y,permit_notes,damage_notes
+"unscored","8910 12th Ave s Bloomington mm 55420","44.8417670","-93.2581800","","false","Permit directory not configured — set NEXT_PUBLIC_SUPABASE_URL and a Supabase key to enable it. Log this one manually for now.","Groq API error: {""error"":{""message"":""The model `meta-llama/llama-4-scout-17b-16e-instruct` does not exist or you do not have access to it."",""type"":""invalid_request_error"",""code"":""model_not_found""}}
+"
