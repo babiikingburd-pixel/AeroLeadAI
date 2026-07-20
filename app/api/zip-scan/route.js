@@ -1,36 +1,80 @@
-import { callVisionModel, activeProvider } from "../../../lib/aiClient";
+// Autonomous ZIP-code address scan, server-side (avoids browser CORS).
+// Pulls addressed buildings from OpenStreetMap's Overpass API — free, no key,
+// no paid parcel vendor required. Real coverage depends on how well that ZIP
+// is mapped in OSM; sparsely-mapped areas will legitimately return few/none
+// (surfaced via `error`/`debug` rather than pretending success).
 
-const DOMAIN_LABELS = { roof: "Roof", tree: "Tree", driveway: "Driveway" };
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
 
-export async function POST(req) {
-  try {
-    const { domain, base64Image, mediaType, finding } = await req.json();
-    const label = DOMAIN_LABELS[domain] || domain;
-
-    if (!activeProvider()) {
-      return Response.json({ error: "No AI provider configured. Set GROQ_API_KEY (free) or ANTHROPIC_API_KEY." }, { status: 500 });
-    }
-
-    const prompt = `You are the Verification Officer for the ${label} Supervisor. An analyst produced this finding
-on the attached image: ${JSON.stringify(finding)}.
-Independently re-examine the image. Respond ONLY with JSON, no preamble:
-{
-  "agrees": <true|false>,
-  "adjusted_score": <0-100 integer, your independent estimate>,
-  "confidence": "<low|medium|high>",
-  "flag_for_human": <true|false, true if evidence is ambiguous or stakes are high>,
-  "note": "<one sentence>"
-}`;
-
-    const { text, provider } = await callVisionModel({ base64Image, mediaType, prompt });
-    const clean = text.replace(/```json|```/g, "").trim();
-
+async function runOverpassQuery(query) {
+  for (const endpoint of OVERPASS_ENDPOINTS) {
     try {
-      return Response.json({ ...JSON.parse(clean), provider });
-    } catch {
-      return Response.json({ agrees: true, adjusted_score: finding?.concern_score, confidence: "low", flag_for_human: true, note: "Could not parse verification response.", provider });
-    }
-  } catch (e) {
-    return Response.json({ error: e?.message || "Unknown server error" }, { status: 500 });
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain", "User-Agent": "AeroLeadAI Property Intelligence (contact: set-your-email@example.com)" },
+        body: query,
+      });
+      if (res.ok) return await res.json();
+    } catch (_) { /* try next mirror */ }
   }
+  return null;
+}
+
+export async function GET(req) {
+  const { searchParams } = new URL(req.url);
+  const zip = (searchParams.get("zip") || "").trim();
+  const max = Math.min(parseInt(searchParams.get("max"), 10) || 50, 200);
+
+  if (!/^\d{5}$/.test(zip)) {
+    return Response.json({ ok: false, error: "Enter a valid 5-digit ZIP code." });
+  }
+
+  // Scoped to the US — OSM postcode tags aren't globally unique (e.g. "10001"
+  // also exists in Spain), and this app is US-only end to end (Census geocoder,
+  // US permit rules, US structural codes), so an unscoped match would silently
+  // pull addresses from the wrong country.
+  const query = `[out:json][timeout:25];
+area["ISO3166-1"="US"][admin_level=2]->.us;
+(
+  node(area.us)["addr:postcode"="${zip}"]["addr:housenumber"];
+  way(area.us)["addr:postcode"="${zip}"]["addr:housenumber"];
+);
+out center ${max * 3};`;
+
+  const data = await runOverpassQuery(query);
+  if (!data) {
+    return Response.json({ ok: false, error: "Address lookup service unavailable — try again shortly.", debug: "Overpass API unreachable on all mirrors." });
+  }
+
+  const seen = new Set();
+  const addresses = [];
+  let city = null, state = null;
+
+  for (const el of data.elements || []) {
+    const tags = el.tags || {};
+    const houseNum = tags["addr:housenumber"];
+    const street = tags["addr:street"];
+    if (!houseNum || !street) continue;
+
+    const address = `${houseNum} ${street}, ${tags["addr:city"] || ""} ${tags["addr:state"] || ""} ${zip}`.replace(/\s+/g, " ").trim();
+    if (seen.has(address)) continue;
+    seen.add(address);
+
+    const lat = el.lat ?? el.center?.lat ?? null;
+    const lon = el.lon ?? el.center?.lon ?? null;
+    addresses.push({ address, lat, lon });
+
+    if (!city && tags["addr:city"]) city = tags["addr:city"];
+    if (!state && tags["addr:state"]) state = tags["addr:state"];
+    if (addresses.length >= max) break;
+  }
+
+  if (addresses.length === 0) {
+    return Response.json({ ok: false, error: "No addressed buildings found for this ZIP in OpenStreetMap.", debug: `0 usable elements for addr:postcode=${zip}` });
+  }
+
+  return Response.json({ ok: true, zip, city, state, count: addresses.length, addresses });
 }
