@@ -3,6 +3,15 @@
 // and a full multi-vantage Street View sweep (multiple panorama points,
 // multiple headings, and multiple pitches so roofline is actually visible
 // looking up, not just flat street-level shots).
+//
+// Mapbox gotcha: if MAPBOX_TOKEN has a URL restriction configured in the
+// Mapbox account (common practice when the same token is reused for
+// NEXT_PUBLIC_MAPBOX_TOKEN client-side map rendering), Mapbox checks the
+// request's Referer header against that allowlist. Server-to-server calls
+// from here have no browser Referer, so a URL-restricted token gets
+// rejected with 401 even though it's valid — use a separate, unrestricted
+// token for MAPBOX_TOKEN if that's happening (surfaced below as an error
+// string, not swallowed silently).
 
 function bearingBetween(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -22,18 +31,27 @@ function destPoint(lat, lon, bearingDeg, distanceM) {
   return { lat: toDeg(lat2), lon: toDeg(lon2) };
 }
 
+// Returns { dataUrl } on success or { error } with the actual HTTP status/body
+// on failure — previously this just returned null either way, which is why
+// failures only ever surfaced as a vague "fetch failed" with no way to tell
+// a bad/restricted token apart from a rate limit or a bad request.
 async function fetchAsDataUrl(url, retries = 1) {
+  let lastError = "unknown error";
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url);
       if (res.ok) {
         const buf = await res.arrayBuffer();
         const mediaType = res.headers.get("content-type") || "image/jpeg";
-        return `data:${mediaType};base64,${Buffer.from(buf).toString("base64")}`;
+        return { dataUrl: `data:${mediaType};base64,${Buffer.from(buf).toString("base64")}` };
       }
-    } catch (_) {}
+      const body = await res.text().catch(() => "");
+      lastError = `HTTP ${res.status}${body ? " — " + body.replace(/\s+/g, " ").slice(0, 200) : ""}`;
+    } catch (e) {
+      lastError = e.message || "network error";
+    }
   }
-  return null;
+  return { error: lastError };
 }
 
 async function getStreetViewMeta(lat, lon, key) {
@@ -79,18 +97,19 @@ export async function POST(req) {
 
   try {
     const tight = await fetchAsDataUrl(tightUrl, 1);
-    if (tight) {
-      result.angles.overview_tight = tight;
-      result.dataUrl = tight; // backward-compat: tight crop is now the primary
+    if (tight.dataUrl) {
+      result.angles.overview_tight = tight.dataUrl;
+      result.dataUrl = tight.dataUrl; // backward-compat: tight crop is now the primary
       result.provider = googleKey ? "google" : "mapbox";
     } else {
-      result.notes.push("Tight overview fetch failed.");
+      result.notes.push(`Tight overview fetch failed: ${tight.error}`);
     }
     const context = await fetchAsDataUrl(contextUrl, 1);
-    if (context) result.angles.overview_context = context;
+    if (context.dataUrl) result.angles.overview_context = context.dataUrl;
+    else result.notes.push(`Context overview fetch failed: ${context.error}`);
     if (hybridUrl) {
       const hybrid = await fetchAsDataUrl(hybridUrl, 1);
-      if (hybrid) result.angles.overview_hybrid_labeled = hybrid;
+      if (hybrid.dataUrl) result.angles.overview_hybrid_labeled = hybrid.dataUrl;
     }
   } catch (e) {
     result.notes.push("Overview imagery error: " + e.message);
@@ -127,9 +146,9 @@ export async function POST(req) {
           for (const s of shots) {
             const url = `https://maps.googleapis.com/maps/api/streetview?size=640x480&pano=${panoId}&heading=${s.heading.toFixed(0)}&pitch=${s.pitch}&fov=75&key=${googleKey}`;
             const img = await fetchAsDataUrl(url, 1);
-            if (img) {
+            if (img.dataUrl) {
               const key = `vantage${panoIndex}_${s.label}`;
-              result.angles[key] = img;
+              result.angles[key] = img.dataUrl;
               result.sweep.push({ key, panoId, heading: Math.round(s.heading), pitch: s.pitch, vantageLat: pano.lat, vantageLon: pano.lon });
             }
           }

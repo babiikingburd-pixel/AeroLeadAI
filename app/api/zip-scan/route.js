@@ -61,6 +61,24 @@ async function uspsValidate(token, { houseNum, street, city, state, zip }) {
   } catch { return null; }
 }
 
+const US_STATES = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA",
+  "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK",
+  "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC", "PR", "VI", "GU", "AS", "MP",
+]);
+
+// Cheap country check on the OSM tags themselves (no expensive area query —
+// see note above). Matches on addr:country when present, otherwise requires
+// a recognized US state/territory abbreviation in addr:state. Foreign
+// addresses (e.g. Cáceres, Spain also uses postcode "10001") essentially
+// never carry a matching US state abbreviation, so this reliably excludes
+// them without the cost of a country-wide polygon query.
+function looksUS(tags) {
+  const country = (tags["addr:country"] || "").toUpperCase();
+  if (country) return country === "US" || country === "USA";
+  return US_STATES.has((tags["addr:state"] || "").toUpperCase());
+}
+
 // Bounded concurrency so a 200-address scan doesn't fire 200 requests at once.
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
@@ -84,15 +102,15 @@ export async function GET(req) {
     return Response.json({ ok: false, error: "Enter a valid 5-digit ZIP code." });
   }
 
-  // Scoped to the US — OSM postcode tags aren't globally unique (e.g. "10001"
-  // also exists in Spain), and this app is US-only end to end (Census geocoder,
-  // US permit rules, US structural codes), so an unscoped match would silently
-  // pull addresses from the wrong country.
+  // NOT scoped via area["ISO3166-1"="US"] — computing a country-sized polygon
+  // intersection is a well-known expensive query in Overpass and reliably
+  // timed out / returned zero results for real US ZIPs (e.g. 55407) even
+  // though the data exists. Country scoping is done cheaply below instead,
+  // by checking addr:state/addr:country tags on the results.
   const query = `[out:json][timeout:25];
-area["ISO3166-1"="US"][admin_level=2]->.us;
 (
-  node(area.us)["addr:postcode"="${zip}"]["addr:housenumber"];
-  way(area.us)["addr:postcode"="${zip}"]["addr:housenumber"];
+  node["addr:postcode"="${zip}"]["addr:housenumber"];
+  way["addr:postcode"="${zip}"]["addr:housenumber"];
 );
 out center ${max * 3};`;
 
@@ -110,6 +128,7 @@ out center ${max * 3};`;
     const houseNum = tags["addr:housenumber"];
     const street = tags["addr:street"];
     if (!houseNum || !street) continue;
+    if (!looksUS(tags)) continue;
 
     const address = `${houseNum} ${street}, ${tags["addr:city"] || ""} ${tags["addr:state"] || ""} ${zip}`.replace(/\s+/g, " ").trim();
     if (seen.has(address)) continue;

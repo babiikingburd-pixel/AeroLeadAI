@@ -388,6 +388,28 @@ export default function PropertyIntelligenceConsole() {
     setGeocoding(false);
   }
 
+  // Uses the device's own GPS via the browser's Geolocation API — no map
+  // provider, no API key, just what's already on the phone/laptop.
+  function useMyLocation() {
+    if (!navigator.geolocation) {
+      setGeocodeError("This browser doesn't support device location.");
+      return;
+    }
+    setGeocoding(true);
+    setGeocodeError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setAddrDraft((d) => ({ ...d, lat: String(pos.coords.latitude), lon: String(pos.coords.longitude) }));
+        setGeocoding(false);
+      },
+      (err) => {
+        setGeocodeError(err.code === err.PERMISSION_DENIED ? "Location permission denied." : "Couldn't get device location.");
+        setGeocoding(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
   async function fetchImageryFor(lat, lon) {
     try {
       const res = await fetch("/api/imagery-agent", {
@@ -471,7 +493,11 @@ export default function PropertyIntelligenceConsole() {
             street = [{ id: uid(), kind: "overview", dataUrl: img.dataUrl, uploadedAt: nowIso(), source: `auto-fetched (${img.provider})` }];
             roofImage = { id: uid(), domain: "roof", dataUrl: img.dataUrl, mediaType: img.dataUrl.slice(5, img.dataUrl.indexOf(";")), uploadedAt: nowIso(), source: "auto-fetched satellite" };
             logBatch(`   imagery fetched (${img.provider})`);
-          } else { needsHuman.push("imagery"); logBatch(`   ⚠ ${img.notes || img.error || "no imagery"}`); }
+          } else {
+            needsHuman.push("imagery");
+            const reason = Array.isArray(img.notes) ? img.notes.join(" · ") : (img.notes || img.error || "no imagery");
+            logBatch(`   ⚠ ${reason}`);
+          }
         } catch (e) { needsHuman.push("imagery"); logBatch(`   ⚠ imagery error`); }
       }
 
@@ -900,6 +926,9 @@ export default function PropertyIntelligenceConsole() {
         <div style={{ marginBottom: 10 }}>
           <button onClick={geocodeAddress} disabled={geocoding || !addrDraft.address} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: geocoding ? MUTE : BLUE, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
             {geocoding ? "Looking up…" : "Find coordinates from address"}
+          </button>
+          <button onClick={useMyLocation} disabled={geocoding} style={{ padding: "6px 12px", marginLeft: 8, background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: geocoding ? MUTE : GREEN, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
+            📍 Use my location
           </button>
           {geocodeError && <span style={{ fontSize: 11, color: SIGNAL, marginLeft: 8 }}>{geocodeError}</span>}
         </div>

@@ -142,12 +142,13 @@ export default function MassUploadConsole() {
   const [zipScanning, setZipScanning] = useState(false);
   const [zipResult, setZipResult] = useState(null);
 
-  async function scanZip() {
-    if (!zipInput.trim()) return;
+  async function scanZip(zipOverride) {
+    const targetZip = (zipOverride || zipInput).trim();
+    if (!targetZip) return;
     setZipScanning(true);
     setZipResult(null);
     try {
-      const res = await fetch(`/api/zip-scan?zip=${zipInput.trim()}&max=${zipMax}`);
+      const res = await fetch(`/api/zip-scan?zip=${targetZip}&max=${zipMax}`);
       const data = await res.json();
       if (!data.ok) { setZipResult({ error: data.error, debug: data.debug }); setZipScanning(false); return; }
       data.addresses.forEach((a) => {
@@ -165,6 +166,41 @@ export default function MassUploadConsole() {
       setZipResult({ error: e.message });
     }
     setZipScanning(false);
+  }
+
+  // Device GPS (browser Geolocation API — no map provider, no API key) reverse-
+  // geocoded to a ZIP via the same free Nominatim service used elsewhere, so
+  // "scan near me" works without typing a ZIP code at all.
+  function scanZipNearMe() {
+    if (!navigator.geolocation) { setZipResult({ error: "This browser doesn't support device location." }); return; }
+    setZipScanning(true);
+    setZipResult(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`, { headers: { "Accept-Language": "en" } });
+          const data = await res.json();
+          const foundZip = data?.address?.postcode?.slice(0, 5);
+          if (foundZip && /^\d{5}$/.test(foundZip)) {
+            setZipInput(foundZip);
+            setZipScanning(false);
+            scanZip(foundZip);
+          } else {
+            setZipResult({ error: "Couldn't determine a ZIP code from your location." });
+            setZipScanning(false);
+          }
+        } catch (e) {
+          setZipResult({ error: "Reverse geocode failed: " + e.message });
+          setZipScanning(false);
+        }
+      },
+      (err) => {
+        setZipResult({ error: err.code === err.PERMISSION_DENIED ? "Location permission denied." : "Couldn't get device location." });
+        setZipScanning(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   }
 
   function queueAddresses() {
@@ -212,7 +248,8 @@ export default function MassUploadConsole() {
           : [];
         return { ...item, dataUrl: data.dataUrl, extraImages: extraAngles, log: [...item.log, `Imagery auto-fetched (${data.provider}) — ${1 + extraAngles.length} angle(s)`] };
       }
-      return { ...item, log: [...item.log, data.notes || data.error || "Imagery unavailable"] };
+      const reason = Array.isArray(data.notes) ? data.notes.join(" · ") : (data.notes || data.error || "Imagery unavailable");
+      return { ...item, log: [...item.log, reason] };
     } catch { return { ...item, log: [...item.log, "Imagery fetch failed"] }; }
   }
 
@@ -391,9 +428,14 @@ export default function MassUploadConsole() {
               <option value={200}>200</option>
             </select>
           </div>
-          <button onClick={scanZip} disabled={zipScanning || zipInput.length !== 5} style={{ ...btnPrimary, width: "100%", opacity: zipScanning || zipInput.length !== 5 ? 0.5 : 1 }}>
-            {zipScanning ? "Scanning ZIP…" : "Scan ZIP code"}
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => scanZip()} disabled={zipScanning || zipInput.length !== 5} style={{ ...btnPrimary, flex: 1, opacity: zipScanning || zipInput.length !== 5 ? 0.5 : 1 }}>
+              {zipScanning ? "Scanning…" : "Scan ZIP code"}
+            </button>
+            <button onClick={scanZipNearMe} disabled={zipScanning} title="Use device GPS to find your ZIP and scan it" style={{ ...btnSecondary, opacity: zipScanning ? 0.5 : 1 }}>
+              📍 Near me
+            </button>
+          </div>
           {zipResult && (
             <div style={{ marginTop: 8, fontSize: 12, color: zipResult.error ? SIGNAL : GREEN }}>
               {zipResult.error ? `Error: ${zipResult.error}` : `✓ Queued ${zipResult.count} addresses in ${zipResult.city}, ${zipResult.state}`}
