@@ -156,10 +156,11 @@ export default function MassUploadConsole() {
           lat: a.lat || null, lon: a.lon || null,
           dataUrl: null, damageScore: null, damageNotes: null,
           permitWithin10y: false, permitNotes: "Not checked",
-          stage: "queued", log: [`Imported from ZIP ${data.zip} scan`],
+          uspsVerified: a.uspsVerified ?? null,
+          stage: "queued", log: [`Imported from ZIP ${data.zip} scan`, ...(a.uspsVerified ? ["USPS-confirmed deliverable address"] : [])],
         });
       });
-      setZipResult({ count: data.count, city: data.city, state: data.state });
+      setZipResult({ count: data.count, city: data.city, state: data.state, debug: data.debug });
     } catch (e) {
       setZipResult({ error: e.message });
     }
@@ -426,12 +427,22 @@ export default function MassUploadConsole() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
         {sorted.map((it) => {
           const tier = tierOf(it);
+          // Surface *why* imagery failed (bad/missing key, rate limit, no
+          // Street View coverage, etc.) instead of just "no imagery" — that
+          // reason is already captured in it.log by fetchImagery, just never
+          // shown anywhere.
+          const imageryLogLine = (it.log || []).slice().reverse().find((l) => /imagery/i.test(l));
           return (
             <div key={it.id} style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, overflow: "hidden" }}>
               <div style={{ position: "relative", height: 150, background: PANEL2 }}>
                 {it.dataUrl
                   ? <img src={it.dataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 12 }}>{it.stage === "done" ? "No imagery — manual review" : "Awaiting imagery"}</div>}
+                  : (
+                    <div title={(it.log || []).join("\n")} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 12, padding: "0 10px", textAlign: "center", gap: 4 }}>
+                      <div>{it.stage === "done" ? "No imagery — manual review" : "Awaiting imagery"}</div>
+                      {imageryLogLine && <div style={{ fontSize: 10, color: SIGNAL }}>{imageryLogLine}</div>}
+                    </div>
+                  )}
                 <span style={{ position: "absolute", top: 8, left: 8, padding: "3px 9px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", background: "rgba(13,20,32,.85)", color: TIER_COLORS[tier] }}>{tier}</span>
                 <button onClick={() => removeItem(it.id)} style={{ position: "absolute", top: 6, right: 6, background: "rgba(13,20,32,.8)", border: "none", color: TEXT, width: 22, height: 22, borderRadius: "50%", cursor: "pointer", fontSize: 13, lineHeight: 1 }}>×</button>
                 {it.dataUrl && (
@@ -441,11 +452,14 @@ export default function MassUploadConsole() {
                 )}
               </div>
               <div style={{ padding: "10px 12px" }}>
-                <input
-                  value={it.address}
-                  onChange={(e) => upsert({ ...it, address: e.target.value })}
-                  style={{ width: "100%", background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 13, fontWeight: 600, padding: "2px 0", marginBottom: 6, boxSizing: "border-box" }}
-                />
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+                  <input
+                    value={it.address}
+                    onChange={(e) => upsert({ ...it, address: e.target.value })}
+                    style={{ flex: 1, background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 13, fontWeight: 600, padding: "2px 0", boxSizing: "border-box" }}
+                  />
+                  {it.uspsVerified === true && <span title="USPS-confirmed deliverable address" style={{ fontSize: 10.5, color: GREEN, fontWeight: 700, whiteSpace: "nowrap" }}>✓ USPS</span>}
+                </div>
                 <div style={{ fontSize: 11.5, color: MUTE, lineHeight: 1.5 }}>
                   <div>Damage: <b style={{ color: TEXT }}>{it.damageScore ?? "—"}</b>{it.damageNotes ? <span title={it.damageNotes}> ⓘ</span> : null}</div>
                   <div title={it.permitNotes}>Permit: {it.permitWithin10y ? <b style={{ color: "#8a6bd1" }}>within 10y → low priority</b> : it.permitNotes}</div>
