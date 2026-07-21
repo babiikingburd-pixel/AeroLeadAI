@@ -243,6 +243,46 @@ async function runSnowVerification(weatherSummary, structural) {
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
+// Projects a real parcel boundary (lat/lon polygon rings from county GIS)
+// onto the satellite overview image. The overview is always fetched at a
+// fixed zoom level (21) and fixed pixel size (640x640, scale 2 = 1280x1280
+// actual), so standard Web Mercator tile math gives an accurate pixel
+// position for each polygon vertex relative to the image center.
+function ParcelOverlay({ rings, centerLat, centerLon }) {
+  const ZOOM = 21;
+  const TILE_SIZE = 256;
+  const IMG_PX = 640; // the size requested from the static maps API (pre-@2x)
+
+  function latLonToPixel(lat, lon) {
+    const scale = Math.pow(2, ZOOM);
+    const worldX = ((lon + 180) / 360) * TILE_SIZE * scale;
+    const sinLat = Math.sin((lat * Math.PI) / 180);
+    const worldY = (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * TILE_SIZE * scale;
+    return { x: worldX, y: worldY };
+  }
+
+  const center = latLonToPixel(centerLat, centerLon);
+
+  const points = (rings?.[0] || [])
+    .map(([lon, lat]) => {
+      const p = latLonToPixel(lat, lon);
+      // offset from image center, converted to percentage of the 640px tile
+      const px = 50 + ((p.x - center.x) / IMG_PX) * 100;
+      const py = 50 + ((p.y - center.y) / IMG_PX) * 100;
+      return `${px}%,${py}%`;
+    })
+    .join(" ");
+
+  if (!points) return null;
+
+  return (
+    <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} preserveAspectRatio="none">
+      <polygon points={points} fill="rgba(79,201,142,0.15)" stroke="#4fc98e" strokeWidth="2" strokeDasharray="4,3" />
+    </svg>
+  );
+}
+
+
 export default function PropertyIntelligenceConsole() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -257,9 +297,38 @@ export default function PropertyIntelligenceConsole() {
   const [loaded, setLoaded] = useState(false);
 
   const [addrDraft, setAddrDraft] = useState({ address: "", lat: "", lon: "", parcelId: "", permitId: "", roofType: "", buildingAge: "", roofPitch: "" });
+
+  useEffect(() => {
+    if (!addrDraft.lat || !addrDraft.lon) { setParcelBoundary(null); return; }
+    let county = resolvedLocation?.county, state = resolvedLocation?.state;
+    // If we don't already know the county (e.g. address was typed manually and
+    // geocoded rather than reverse-geocoded via GPS), resolve it now.
+    (async () => {
+      if (!county) {
+        try {
+          const rev = await fetch("/api/reverse-geocode", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: addrDraft.lat, lon: addrDraft.lon }),
+          });
+          const revData = await rev.json();
+          if (revData.ok) {
+            county = revData.raw?.county;
+            state = revData.raw?.state_code || revData.raw?.state;
+            setResolvedLocation({ county, state });
+          }
+        } catch (_) {}
+      }
+      const parcel = await fetchParcelBoundary(addrDraft.lat, addrDraft.lon, county, state);
+      setParcelBoundary(parcel);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addrDraft.lat, addrDraft.lon]);
+
   const [geocoding, setGeocoding] = useState(false);
   const [creatingProperty, setCreatingProperty] = useState(false);
   const [geocodeError, setGeocodeError] = useState(null);
+  const [resolvedLocation, setResolvedLocation] = useState(null); // {county, state} from reverse geocode
+  const [parcelBoundary, setParcelBoundary] = useState(null); // {ok, covered, rings, attributes, notes}
   const [statuses, setStatuses] = useState({});
   const [memory, setMemory] = useState({});
   const [selectedAgent, setSelectedAgent] = useState(null);
@@ -308,6 +377,53 @@ export default function PropertyIntelligenceConsole() {
   function blankFolders() {
     return { images: [], drone: [], street: [], historical: [], weather: [], permits: [], inspectionReports: [], contractorNotes: [], aiFindings: [], repairs: [], timeline: [] };
   }
+
+  async function useMyLocation() {
+    if (!navigator.geolocation) { setGeocodeError("This browser doesn't support GPS location."); return; }
+    setGeocoding(true);
+    setGeocodeError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        try {
+          const res = await fetch("/api/reverse-geocode", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: latitude, lon: longitude }),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            setAddrDraft((d) => ({ ...d, address: data.address, lat: String(latitude), lon: String(longitude) }));
+            setResolvedLocation({ county: data.raw?.county, state: data.raw?.state_code || data.raw?.state });
+          } else {
+            setAddrDraft((d) => ({ ...d, lat: String(latitude), lon: String(longitude) }));
+            setGeocodeError(data.error || "Got your location but couldn't resolve a street address — coordinates filled in.");
+          }
+        } catch (e) {
+          setAddrDraft((d) => ({ ...d, lat: String(latitude), lon: String(longitude) }));
+          setGeocodeError("Location found but reverse geocoding failed — coordinates filled in.");
+        }
+        setGeocoding(false);
+      },
+      (err) => {
+        setGeocoding(false);
+        setGeocodeError(err.code === 1 ? "Location permission denied — allow location access to use GPS." : "Couldn't get your location: " + err.message);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
+  async function fetchParcelBoundary(lat, lon, county, state) {
+    try {
+      const res = await fetch("/api/parcel-boundary", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat, lon, county, state }),
+      });
+      return await res.json();
+    } catch (e) {
+      return { ok: false, notes: "Parcel lookup failed: " + e.message };
+    }
+  }
+
 
   async function geocodeAddress() {
     if (!addrDraft.address) return;
@@ -381,8 +497,8 @@ export default function PropertyIntelligenceConsole() {
       // full multi-angle coverage is kept, not just the front-facing one.
       if (data.angles) {
         for (const [key, dataUrl] of Object.entries(data.angles)) {
-          if (key === "overview") continue;
-          shots.push({ id: uid(), kind: key, dataUrl, uploadedAt: nowIso(), source: "street-view sweep" });
+          if (key === "overview_tight") continue; // already added above as the primary shot
+          shots.push({ id: uid(), kind: key, dataUrl, uploadedAt: nowIso(), source: key.startsWith("mapillary") ? "mapillary sweep" : "street-view sweep" });
         }
       }
       return shots;
@@ -425,6 +541,7 @@ export default function PropertyIntelligenceConsole() {
     setBatchRunning(true);
     setBatchLog([]);
     setBatchProgress({ done: 0, total: addresses.length });
+    setCurrentId(null); // clear stale preview so old imagery can't be mistaken for this run's results
     let propsAccum = { ...properties };
 
     for (const address of addresses) {
@@ -439,15 +556,26 @@ export default function PropertyIntelligenceConsole() {
         else { needsHuman.push("geocode"); logBatch(`   ⚠ geocode failed — add lat/lon manually`); }
       } catch (e) { needsHuman.push("geocode"); logBatch(`   ⚠ geocode error`); }
 
-      // 2. Imagery
-      let street = [], roofImage = null;
+      // 2. Imagery — full sweep (tight crop + roofline-pitched angles), not
+      //    just one satellite tile, so batch-created properties get the same
+      //    multi-angle coverage as manually-added ones.
+      let street = [], roofImage = null, extraRoofImages = [];
       if (lat && lon) {
         try {
           const img = await (await fetch("/api/imagery-agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) })).json();
           if (img.dataUrl) {
-            street = [{ id: uid(), kind: "overview", dataUrl: img.dataUrl, uploadedAt: nowIso(), source: `auto-fetched (${img.provider})` }];
+            street = [{ id: uid(), kind: "overview_tight", dataUrl: img.dataUrl, uploadedAt: nowIso(), source: `auto-fetched (${img.provider})` }];
+            if (img.angles) {
+              for (const [key, dataUrl] of Object.entries(img.angles)) {
+                if (key === "overview_tight") continue;
+                street.push({ id: uid(), kind: key, dataUrl, uploadedAt: nowIso(), source: "street-view sweep" });
+              }
+            }
             roofImage = { id: uid(), domain: "roof", dataUrl: img.dataUrl, mediaType: img.dataUrl.slice(5, img.dataUrl.indexOf(";")), uploadedAt: nowIso(), source: "auto-fetched satellite" };
-            logBatch(`   imagery fetched (${img.provider})`);
+            extraRoofImages = (img.angles ? Object.entries(img.angles) : [])
+              .filter(([k]) => k.includes("roofline"))
+              .map(([, dataUrl]) => ({ base64Image: dataUrl.split(",")[1], mediaType: dataUrl.slice(5, dataUrl.indexOf(";")) }));
+            logBatch(`   imagery fetched (${img.provider}) — ${1 + extraRoofImages.length} angle(s) for scoring`);
           } else { needsHuman.push("imagery"); logBatch(`   ⚠ ${img.notes || img.error || "no imagery"}`); }
         } catch (e) { needsHuman.push("imagery"); logBatch(`   ⚠ imagery error`); }
       }
@@ -463,16 +591,18 @@ export default function PropertyIntelligenceConsole() {
         } else logBatch(`   permits: ${pr.notes}`);
       } catch (e) { logBatch(`   ⚠ permit lookup error`); }
 
-      // 4. Damage scoring on the fetched tile (skipped if deprioritized — no
-      //    point spending vision tokens on a lead the 10-year rule already sank)
+      // 4. Damage scoring across the FULL image set (primary tile + any
+      //    roofline-pitched street view angles), not just one tile — skipped
+      //    if deprioritized, no point spending vision tokens on a dead lead.
       let findingsScore = null, aiFindings = [];
       if (roofImage && !lowPriority) {
         try {
           const base64 = roofImage.dataUrl.split(",")[1];
-          const { finding, runs } = await runAnalystAveraged("roof", base64, roofImage.mediaType, address);
+          const images = [{ base64Image: base64, mediaType: roofImage.mediaType }, ...extraRoofImages];
+          const { finding, runs } = await runAnalystAveraged("roof", images, address);
           findingsScore = finding.concern_score;
-          aiFindings = [{ id: uid(), at: nowIso(), results: { roof: finding }, findingsScore, source: `batch auto-scan (${runs} run${runs > 1 ? "s" : ""}, ${finding.provider})` }];
-          logBatch(`   damage score ${findingsScore} (${finding.level})`);
+          aiFindings = [{ id: uid(), at: nowIso(), results: { roof: finding }, findingsScore, source: `batch auto-scan (${runs} run${runs > 1 ? "s" : ""}, ${images.length} angle(s), ${finding.provider})` }];
+          logBatch(`   damage score ${findingsScore} (${finding.level}) across ${images.length} angle(s)`);
         } catch (e) { needsHuman.push("scoring"); logBatch(`   ⚠ scoring failed: ${e.message}`); }
       } else if (lowPriority) {
         findingsScore = 0;
@@ -492,6 +622,13 @@ export default function PropertyIntelligenceConsole() {
       await persistProperties(propsAccum);
       setBatchProgress((p) => ({ ...p, done: p.done + 1 }));
     }
+
+    // Select the last successfully-imaged property so the preview pane shows
+    // real results from THIS run, not stale state from before the batch ran —
+    // that mismatch is what made a failed-geocode row look like it had a
+    // working image next to it.
+    const lastGood = Object.values(propsAccum).reverse().find((p) => p.folders.street.length > 0);
+    if (lastGood) setCurrentId(lastGood.id);
 
     logBatch(`✔ Batch complete — ${addresses.length} properties processed.`);
     setBatchRunning(false);
@@ -583,10 +720,13 @@ export default function PropertyIntelligenceConsole() {
       id, ...addrDraft, createdAt: nowIso(),
       folders: { ...blankFolders(), street, permits },
       findingsScore: null, suggestedActions: [],
+      parcelBoundary: parcelBoundary?.ok ? { rings: parcelBoundary.rings, attributes: parcelBoundary.attributes, county: parcelBoundary.county, state: parcelBoundary.state } : null,
     };
     await persistProperties({ ...properties, [id]: prop });
     setCurrentId(id);
     setAddrDraft({ address: "", lat: "", lon: "", parcelId: "", permitId: "", roofType: "", buildingAge: "", roofPitch: "" });
+    setParcelBoundary(null);
+    setResolvedLocation(null);
     setCreatingProperty(false);
   }
 
@@ -869,12 +1009,22 @@ export default function PropertyIntelligenceConsole() {
               style={{ padding: "8px 10px", background: PANEL, border: `1px solid ${LINE}`, borderRadius: 6, color: "#dfe6ee", fontSize: 13 }} />
           ))}
         </div>
-        <div style={{ marginBottom: 10 }}>
+        <div style={{ marginBottom: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={geocodeAddress} disabled={geocoding || !addrDraft.address} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: geocoding ? MUTE : BLUE, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
             {geocoding ? "Looking up…" : "Find coordinates from address"}
           </button>
-          {geocodeError && <span style={{ fontSize: 11, color: SIGNAL, marginLeft: 8 }}>{geocodeError}</span>}
+          <button onClick={useMyLocation} disabled={geocoding} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${GREEN}`, borderRadius: 6, color: geocoding ? MUTE : GREEN, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
+            📍 {geocoding ? "Locating…" : "Use my location"}
+          </button>
+          {geocodeError && <span style={{ fontSize: 11, color: SIGNAL }}>{geocodeError}</span>}
         </div>
+        {parcelBoundary && (
+          <div style={{ marginBottom: 10, fontSize: 11.5, padding: "8px 10px", borderRadius: 6, background: parcelBoundary.ok ? "rgba(79,201,142,0.1)" : "rgba(119,131,154,0.1)", border: `1px solid ${parcelBoundary.ok ? GREEN : LINE}`, color: parcelBoundary.ok ? GREEN : MUTE }}>
+            {parcelBoundary.ok
+              ? `✓ Parcel boundary found (${parcelBoundary.county}, ${parcelBoundary.state}) — ${Object.keys(parcelBoundary.attributes || {}).length} attribute fields on file.`
+              : parcelBoundary.notes}
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button onClick={createProperty} disabled={creatingProperty || !addrDraft.address} style={{ padding: "8px 16px", background: creatingProperty ? MUTE : AMBER, color: "#1a1200", border: "none", borderRadius: 6, fontWeight: 700, cursor: creatingProperty ? "default" : "pointer" }}>
             {creatingProperty ? "Fetching imagery + permits…" : "Add Property"}
@@ -962,8 +1112,16 @@ export default function PropertyIntelligenceConsole() {
           )}
           {current.folders.street.length > 0 && (
             <div style={{ marginBottom: 16, borderRadius: 10, overflow: "hidden", border: `1px solid ${LINE}` }}>
-              <img src={current.folders.street[0].dataUrl} alt="Property overview" style={{ width: "100%", maxHeight: 320, objectFit: "cover", display: "block" }} />
-              <div style={{ padding: "8px 12px", background: PANEL, fontSize: 11, color: MUTE, fontFamily: "monospace" }}>Bird's-eye overview — {current.address}</div>
+              <div style={{ position: "relative" }}>
+                <img src={current.folders.street[0].dataUrl} alt="Property overview" style={{ width: "100%", maxHeight: 320, objectFit: "cover", display: "block" }} />
+                {current.parcelBoundary?.rings && current.lat && current.lon && (
+                  <ParcelOverlay rings={current.parcelBoundary.rings} centerLat={parseFloat(current.lat)} centerLon={parseFloat(current.lon)} />
+                )}
+              </div>
+              <div style={{ padding: "8px 12px", background: PANEL, fontSize: 11, color: MUTE, fontFamily: "monospace" }}>
+                Bird's-eye overview — {current.address}
+                {current.parcelBoundary?.rings && <span style={{ color: GREEN }}> · parcel line overlaid ({current.parcelBoundary.county})</span>}
+              </div>
               {current.folders.street.length > 1 && (
                 <div style={{ display: "flex", gap: 6, padding: "10px 12px", overflowX: "auto", background: "#0d1420" }}>
                   {current.folders.street.slice(1).map((shot) => (

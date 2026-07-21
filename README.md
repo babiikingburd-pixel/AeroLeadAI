@@ -27,6 +27,26 @@ see exactly what ran where. Free tier is also rate-limited (~30
 requests/minute), and multi-run averaging (below) uses 3 calls per
 analysis, so it'll hit that limit faster than a single-call setup would.
 
+## Imagery now runs with zero keys
+
+`/api/imagery-agent` picks the best available provider automatically —
+nothing to configure to get started:
+
+- **Satellite overview**: `GOOGLE_MAPS_API_KEY` > `MAPBOX_TOKEN` > **Esri
+  World Imagery** (default — free, keyless, no signup at all). This means
+  the satellite tile + damage scoring pipeline works the moment you deploy,
+  before you've set up any imagery key. Esri's resolution varies by area
+  (it's a composite of several public sources) — add a Google or Mapbox key
+  later for guaranteed-fresh, uniform-resolution shots.
+- **Street-level sweep** (roofline-pitched angles): `GOOGLE_MAPS_API_KEY`
+  (best — real panoramas, full heading/pitch control) > `MAPILLARY_TOKEN`
+  (free, no-card signup at mapillary.com, but crowd-sourced coverage so some
+  addresses have none) > skipped with a clear note if neither is set.
+
+The Agent Control Center / batch log shows which provider actually answered
+(`esri`, `google`, `mapbox`, plus `mapillary` vantage shots when used) so
+you always know what ran.
+
 ## What's in this version
 
 - **Damage Analyst + Verification Officer** for Roof/Tree/Driveway: real

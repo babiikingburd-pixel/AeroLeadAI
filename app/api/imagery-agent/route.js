@@ -1,8 +1,61 @@
 // Multi-angle imagery, server-side (avoids browser CORS issues).
 // Produces: tight parcel-cropped overview, mid-range overview for context,
-// and a full multi-vantage Street View sweep (multiple panorama points,
+// and a full multi-vantage street-level sweep (multiple panorama points,
 // multiple headings, and multiple pitches so roofline is actually visible
 // looking up, not just flat street-level shots).
+//
+// Provider chain, chosen automatically — no manual switching required:
+//   Satellite overview:  GOOGLE_MAPS_API_KEY > MAPBOX_TOKEN > Esri World
+//                         Imagery (default — free, no key, no signup, works
+//                         the moment this app is deployed with zero config).
+//   Street-level sweep:  GOOGLE_MAPS_API_KEY (best: real panoramas, full
+//                         heading/pitch control) > MAPILLARY_TOKEN (free,
+//                         no-card signup at mapillary.com/dashboard, but
+//                         crowd-sourced coverage so some addresses have
+//                         none) > skipped with a clear note.
+//
+// Esri's World Imagery is a public, keyless ArcGIS REST export service
+// (server.arcgisonline.com) — same "no billing account" spirit as the
+// Census/Nominatim/county-GIS lookups already used elsewhere in this app.
+// Its resolution varies by area (it's a composite of Maxar, USDA NAIP, and
+// other sources) — usually well under 1m/pixel in US suburban/urban areas,
+// occasionally coarser in rural spots. Good enough to run the pipeline
+// end-to-end with zero setup; add a Google or Mapbox key later for
+// guaranteed-fresh, uniform-resolution imagery.
+
+function metersToDegLat(m) { return m / 111320; }
+function metersToDegLon(m, atLat) { return m / (111320 * Math.cos((atLat * Math.PI) / 180)); }
+
+function esriExportUrl(lat, lon, halfWidthMeters) {
+  const dLat = metersToDegLat(halfWidthMeters);
+  const dLon = metersToDegLon(halfWidthMeters, lat);
+  const bbox = [lon - dLon, lat - dLat, lon + dLon, lat + dLat].join(",");
+  return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=640,640&format=jpg&f=image`;
+}
+
+async function fetchMapillaryVantages(lat, lon, token) {
+  // Small bbox (~70m) around the point; crowd-sourced coverage means results
+  // can be empty in many spots — that's expected, not an error.
+  const d = 0.00065;
+  const bbox = [lon - d, lat - d, lon + d, lat + d].join(",");
+  const url = `https://graph.mapillary.com/images?access_token=${token}&fields=id,thumb_2048_url,compass_angle,geometry&bbox=${bbox}&limit=12`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return { images: [], note: `Mapillary lookup HTTP ${res.status}` };
+    const data = await res.json();
+    const items = (data?.data || []).filter((im) => im.thumb_2048_url);
+    if (!items.length) return { images: [], note: "No Mapillary street-level coverage found near this property." };
+    // Closest-first by simple planar distance (fine at this scale).
+    items.sort((a, b) => {
+      const da = a.geometry ? (a.geometry.coordinates[0] - lon) ** 2 + (a.geometry.coordinates[1] - lat) ** 2 : Infinity;
+      const db = b.geometry ? (b.geometry.coordinates[0] - lon) ** 2 + (b.geometry.coordinates[1] - lat) ** 2 : Infinity;
+      return da - db;
+    });
+    return { images: items.slice(0, 4), note: `Found ${items.length} Mapillary photo(s) nearby, using closest ${Math.min(4, items.length)}.` };
+  } catch (e) {
+    return { images: [], note: "Mapillary lookup failed: " + e.message };
+  }
+}
 
 function bearingBetween(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -51,24 +104,27 @@ export async function POST(req) {
 
   const googleKey = process.env.GOOGLE_MAPS_API_KEY;
   const mapboxKey = process.env.MAPBOX_TOKEN;
-
-  if (!googleKey && !mapboxKey) {
-    return Response.json({ error: "No imagery provider configured", notes: "Set GOOGLE_MAPS_API_KEY or MAPBOX_TOKEN." }, { status: 200 });
-  }
+  const mapillaryToken = process.env.MAPILLARY_TOKEN;
+  // No "no provider configured" bail-out anymore — Esri World Imagery below
+  // is free and keyless, so satellite overview always runs autonomously.
 
   const result = { angles: {}, sweep: [], notes: [] };
 
-  // TWO overview shots at different zoom: a tight parcel-cropped shot (zoom 21,
-  // as close as Google Static Maps allows — isolates the single structure
-  // instead of showing 3 neighboring houses) AND a context shot (zoom 19) so
-  // the model can still see lot boundaries/neighbors when useful, without the
-  // tight shot being the only option.
+  // TWO overview shots at different zoom: a tight parcel-cropped shot, as
+  // close as the provider allows — isolates the single structure instead of
+  // showing 3 neighboring houses — AND a context shot so the model can still
+  // see lot boundaries/neighbors when useful, without the tight shot being
+  // the only option.
   const tightUrl = googleKey
     ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=21&size=640x640&scale=2&maptype=satellite&key=${googleKey}`
-    : `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},20,0/640x640@2x?access_token=${mapboxKey}`;
+    : mapboxKey
+    ? `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},20,0/640x640@2x?access_token=${mapboxKey}`
+    : esriExportUrl(lat, lon, 30); // ~60m-wide frame, tight parcel crop
   const contextUrl = googleKey
     ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=19&size=640x640&scale=2&maptype=satellite&key=${googleKey}`
-    : `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},18,0/640x640@2x?access_token=${mapboxKey}`;
+    : mapboxKey
+    ? `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},18,0/640x640@2x?access_token=${mapboxKey}`
+    : esriExportUrl(lat, lon, 120); // ~240m-wide frame, neighborhood context
   // Hybrid overlay (Google only): satellite + parcel/road/label layer, which
   // is the closest free source gets to a property-line reference — actual
   // parcel polygons need county GIS, but road+label overlay at minimum shows
@@ -77,12 +133,14 @@ export async function POST(req) {
     ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=20&size=640x640&scale=2&maptype=hybrid&key=${googleKey}`
     : null;
 
+  const overviewProvider = googleKey ? "google" : mapboxKey ? "mapbox" : "esri";
+
   try {
     const tight = await fetchAsDataUrl(tightUrl, 1);
     if (tight) {
       result.angles.overview_tight = tight;
       result.dataUrl = tight; // backward-compat: tight crop is now the primary
-      result.provider = googleKey ? "google" : "mapbox";
+      result.provider = overviewProvider;
     } else {
       result.notes.push("Tight overview fetch failed.");
     }
@@ -91,6 +149,9 @@ export async function POST(req) {
     if (hybridUrl) {
       const hybrid = await fetchAsDataUrl(hybridUrl, 1);
       if (hybrid) result.angles.overview_hybrid_labeled = hybrid;
+    }
+    if (overviewProvider === "esri") {
+      result.notes.push("Satellite imagery from Esri World Imagery (free, keyless). Resolution varies by area — add GOOGLE_MAPS_API_KEY or MAPBOX_TOKEN for guaranteed-fresh, uniform-resolution shots.");
     }
   } catch (e) {
     result.notes.push("Overview imagery error: " + e.message);
@@ -139,8 +200,30 @@ export async function POST(req) {
     } catch (e) {
       result.notes.push("Street View sweep error: " + e.message);
     }
+  } else if (mapillaryToken) {
+    // Free alternative: Mapillary is crowd-sourced street-level photography.
+    // No pitch/heading control like Street View (whatever angle the photo
+    // was captured at is what you get), and coverage is patchy outside
+    // well-mapped areas, but it's a genuine no-cost option where Google
+    // billing setup is a blocker.
+    try {
+      const { images, note } = await fetchMapillaryVantages(lat, lon, mapillaryToken);
+      result.notes.push(note);
+      let i = 0;
+      for (const im of images) {
+        i++;
+        const img = await fetchAsDataUrl(im.thumb_2048_url, 1);
+        if (img) {
+          const key = `mapillary_vantage${i}`;
+          result.angles[key] = img;
+          result.sweep.push({ key, heading: im.compass_angle ?? null, source: "mapillary" });
+        }
+      }
+    } catch (e) {
+      result.notes.push("Mapillary sweep error: " + e.message);
+    }
   } else {
-    result.notes.push("Street-level sweep requires GOOGLE_MAPS_API_KEY (Mapbox has no street-view equivalent).");
+    result.notes.push("Street-level sweep needs GOOGLE_MAPS_API_KEY (best quality) or the free MAPILLARY_TOKEN (console.mapillary.com — no card needed, but crowd-sourced coverage so some addresses have none).");
   }
 
   result.notes.push("Parcel boundary lines require county GIS data (jurisdiction-specific, not a single national API) — the hybrid overlay shot shows road/label context as the closest free proxy. True elevated oblique (~45° looking down) still needs a paid aerial vendor.");

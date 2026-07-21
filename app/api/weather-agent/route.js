@@ -18,7 +18,7 @@ export async function POST(req) {
     const forecastUrl = point?.properties?.forecast;
     if (!forecastUrl) throw new Error("No forecast URL returned for these coordinates");
 
-    const fRes = await fetch(forecastUrl, { headers: { Accept: "application/geo+json" } });
+    const fRes = await fetch(forecastUrl, { headers: { Accept: "application/geo+json", "User-Agent": "AeroLeadAI Property Intelligence (contact: set-your-email@example.com)" } });
     if (!fRes.ok) throw new Error(`NWS forecast fetch failed: ${fRes.status}`);
     const forecast = await fRes.json();
     const periods = forecast?.properties?.periods || [];
