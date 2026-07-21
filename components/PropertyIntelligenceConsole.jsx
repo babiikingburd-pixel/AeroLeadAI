@@ -108,6 +108,30 @@ function levelFromScore(score) {
   return "low";
 }
 
+// Converts a parcel boundary ring (array of [lon,lat] pairs) into SVG
+// polygon points, preserving true proportions — longitude degrees are
+// shorter than latitude degrees away from the equator (~30% shorter at
+// Minneapolis's latitude), so this corrects by cos(latitude) before scaling
+// uniformly. Without that correction every parcel would render visibly
+// stretched east-west.
+function parcelPolygonPoints(ring) {
+  if (!ring || ring.length < 3) return null;
+  const lats = ring.map((p) => p[1]);
+  const centerLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const lonScale = Math.cos((centerLat * Math.PI) / 180);
+  const xs = ring.map((p) => p[0] * lonScale);
+  const ys = lats;
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const span = Math.max(maxX - minX, maxY - minY) || 1e-9;
+  const pad = 15, size = 100 - 2 * pad;
+  return ring.map((_, i) => {
+    const x = pad + ((xs[i] - minX) / span) * size;
+    const y = pad + (1 - (ys[i] - minY) / span) * size; // flip Y: screen space is top-down, lat increases northward
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+}
+
 // ---------------------------------------------------------------------------
 // Storage: Supabase if NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY are set (see
 // README for the one-time table SQL), otherwise localStorage automatically.
@@ -264,6 +288,8 @@ export default function PropertyIntelligenceConsole() {
   const [memory, setMemory] = useState({});
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [running, setRunning] = useState(false);
+  const [parcelLoading, setParcelLoading] = useState(false);
+  const [parcelError, setParcelError] = useState(null);
 
   const fileRefs = { roof: useRef(null), tree: useRef(null), driveway: useRef(null) };
 
@@ -389,7 +415,9 @@ export default function PropertyIntelligenceConsole() {
   }
 
   // Uses the device's own GPS via the browser's Geolocation API — no map
-  // provider, no API key, just what's already on the phone/laptop.
+  // provider, no API key, just what's already on the phone/laptop. Also
+  // reverse-geocodes the fix into a human-readable address server-side, so
+  // one tap fills in both lat/lon AND the address field.
   function useMyLocation() {
     if (!navigator.geolocation) {
       setGeocodeError("This browser doesn't support device location.");
@@ -398,8 +426,17 @@ export default function PropertyIntelligenceConsole() {
     setGeocoding(true);
     setGeocodeError(null);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setAddrDraft((d) => ({ ...d, lat: String(pos.coords.latitude), lon: String(pos.coords.longitude) }));
+      async (pos) => {
+        const lat = String(pos.coords.latitude), lon = String(pos.coords.longitude);
+        setAddrDraft((d) => ({ ...d, lat, lon }));
+        try {
+          const res = await fetch("/api/reverse-geocode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) });
+          const data = await res.json();
+          if (data.ok) {
+            const addr = data.address || [data.houseNumber, data.street, data.city, data.state, data.zip].filter(Boolean).join(", ");
+            if (addr) setAddrDraft((d) => ({ ...d, address: addr }));
+          }
+        } catch (_) { /* lat/lon already set — address fill-in is a bonus, not required */ }
         setGeocoding(false);
       },
       (err) => {
@@ -434,6 +471,33 @@ export default function PropertyIntelligenceConsole() {
     } catch (e) {
       return [];
     }
+  }
+
+  // Real county GIS parcel lookup (coverage: Hennepin County, MN today — see
+  // lib/parcelSources.js). Not available everywhere, and says so honestly
+  // when it isn't rather than showing nothing with no explanation.
+  async function fetchParcelBoundary() {
+    if (!current || !current.lat || !current.lon) return;
+    setParcelLoading(true);
+    setParcelError(null);
+    try {
+      const res = await fetch("/api/parcel-boundary", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: current.lat, lon: current.lon }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setParcelError(data.error || "Parcel lookup failed.");
+        setParcelLoading(false);
+        return;
+      }
+      const nextProp = { ...current, parcel: data };
+      await persistProperties({ ...properties, [current.id]: nextProp });
+      addTimeline(current.id, `Parcel boundary fetched from ${data.source} — PID ${data.parcelId || "unknown"}, ${data.areaSqFt ? Math.round(data.areaSqFt) + " sq ft" : "lot size unknown"}.`);
+    } catch (e) {
+      setParcelError("Parcel lookup failed: " + e.message);
+    }
+    setParcelLoading(false);
   }
 
   async function fetchPermitsFor(address) {
@@ -1033,6 +1097,35 @@ export default function PropertyIntelligenceConsole() {
               )}
             </div>
           )}
+
+          <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: current.parcel ? 12 : 0, flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER }}>PARCEL</div>
+              <button onClick={fetchParcelBoundary} disabled={parcelLoading || !current.lat || !current.lon} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: parcelLoading ? MUTE : BLUE, fontSize: 12, cursor: parcelLoading ? "default" : "pointer" }}>
+                {parcelLoading ? "Looking up…" : current.parcel ? "Refresh parcel boundary" : "Fetch parcel boundary"}
+              </button>
+            </div>
+            {parcelError && <div style={{ fontSize: 12, color: SIGNAL, marginTop: 8 }}>{parcelError}</div>}
+            {current.parcel && (
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 200px) 1fr", gap: 16, alignItems: "center" }}>
+                {current.parcel.geometry?.coordinates?.[0] && (
+                  <svg viewBox="0 0 100 100" style={{ width: "100%", background: "#0d1420", borderRadius: 8, border: `1px solid ${LINE}` }}>
+                    <polygon points={parcelPolygonPoints(current.parcel.geometry.coordinates[0])} fill="rgba(79,163,227,0.25)" stroke={BLUE} strokeWidth="1.5" />
+                  </svg>
+                )}
+                <div style={{ fontSize: 12, color: MUTE, lineHeight: 1.7 }}>
+                  <div>Parcel ID: <span style={{ color: "#dfe6ee" }}>{current.parcel.parcelId || "—"}</span></div>
+                  <div>Lot size: <span style={{ color: "#dfe6ee" }}>{current.parcel.areaSqFt ? `${Math.round(current.parcel.areaSqFt).toLocaleString()} sq ft (${(current.parcel.areaSqFt / 43560).toFixed(2)} ac)` : "—"}</span></div>
+                  <div>Built: <span style={{ color: "#dfe6ee" }}>{current.parcel.buildYear || "—"}</span></div>
+                  {current.parcel.owner && <div>Owner on file: <span style={{ color: "#dfe6ee" }}>{current.parcel.owner.trim()}</span></div>}
+                  <div style={{ fontSize: 10.5, marginTop: 4 }}>{current.parcel.source}</div>
+                </div>
+              </div>
+            )}
+            {!current.parcel && !parcelError && (
+              <div style={{ fontSize: 12, color: MUTE }}>No parcel data fetched yet. Coverage today: Hennepin County, MN — more counties added one at a time in lib/parcelSources.js.</div>
+            )}
+          </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16, marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
             <div>
