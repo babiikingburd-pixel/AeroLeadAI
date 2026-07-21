@@ -505,6 +505,19 @@ export default function PropertyIntelligenceConsole() {
   const [enhanceParams, setEnhanceParams] = useState({ zoom: 1, brightness: 0, contrast: 0, sharpen: false });
   const [enhancePreview, setEnhancePreview] = useState(null);
 
+  function closeEnhanceModal() {
+    setEnhanceTarget(null);
+    setEnhancePreview(null);
+    setEnhanceParams({ zoom: 1, brightness: 0, contrast: 0, sharpen: false });
+  }
+
+  useEffect(() => {
+    if (!enhanceTarget) return;
+    const onKey = (e) => { if (e.key === "Escape") closeEnhanceModal(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [enhanceTarget]);
+
   function applyEnhancement(dataUrl, { zoom, brightness, contrast, sharpen }) {
     return new Promise((resolve) => {
       const img = new Image();
@@ -565,8 +578,7 @@ export default function PropertyIntelligenceConsole() {
     const nextProp = { ...current, folders: { ...current.folders, [enhanceTarget.folder]: folder } };
     await persistProperties({ ...properties, [current.id]: nextProp });
     addTimeline(current.id, `Image enhanced (zoom ${enhanceParams.zoom}x, brightness ${enhanceParams.brightness}, contrast ${enhanceParams.contrast}${enhanceParams.sharpen ? ", sharpened" : ""}).`);
-    setEnhanceTarget(null); setEnhancePreview(null);
-    setEnhanceParams({ zoom: 1, brightness: 0, contrast: 0, sharpen: false });
+    closeEnhanceModal();
   }
 
   async function createProperty() {
@@ -918,9 +930,12 @@ export default function PropertyIntelligenceConsole() {
       </div>
 
       {enhanceTarget && current && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-          <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 12, padding: 20, maxWidth: 720, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-            <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER, marginBottom: 10 }}>IMAGE ENHANCEMENT — ZOOM CALIBRATION / EDIT</div>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={closeEnhanceModal}>
+          <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 12, padding: 20, maxWidth: 720, width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER }}>IMAGE ENHANCEMENT — ZOOM CALIBRATION / EDIT</div>
+              <button onClick={closeEnhanceModal} aria-label="Close" style={{ background: "none", border: "none", color: MUTE, cursor: "pointer", fontSize: 20, lineHeight: 1, padding: 4 }}>×</button>
+            </div>
             <img
               src={enhancePreview || current.folders[enhanceTarget.folder].find((i) => i.id === enhanceTarget.imageId)?.dataUrl}
               alt="Enhancement preview"
@@ -940,7 +955,7 @@ export default function PropertyIntelligenceConsole() {
             <div style={{ display: "flex", gap: 10 }}>
               <button onClick={previewEnhancement} style={{ padding: "8px 16px", background: "transparent", border: `1px solid ${BLUE}`, color: BLUE, borderRadius: 6, fontWeight: 700, cursor: "pointer" }}>Preview</button>
               <button onClick={saveEnhancement} disabled={!enhancePreview} style={{ padding: "8px 16px", background: enhancePreview ? AMBER : LINE, color: enhancePreview ? "#1a1200" : MUTE, border: "none", borderRadius: 6, fontWeight: 700, cursor: enhancePreview ? "pointer" : "default" }}>Save enhanced</button>
-              <button onClick={() => { setEnhanceTarget(null); setEnhancePreview(null); setEnhanceParams({ zoom: 1, brightness: 0, contrast: 0, sharpen: false }); }} style={{ padding: "8px 16px", background: "transparent", border: `1px solid ${LINE}`, color: MUTE, borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+              <button onClick={closeEnhanceModal} style={{ padding: "8px 16px", background: "transparent", border: `1px solid ${LINE}`, color: MUTE, borderRadius: 6, cursor: "pointer" }}>Cancel</button>
             </div>
           </div>
         </div>

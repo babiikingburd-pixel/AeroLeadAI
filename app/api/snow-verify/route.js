@@ -1,5 +1,7 @@
 import { callTextModel, activeProvider } from "../../../lib/aiClient";
 
+export const maxDuration = 30;
+
 export async function POST(req) {
   try {
     const { weatherSummary, structural } = await req.json();

@@ -1,5 +1,7 @@
 import { callVisionModel, activeProvider } from "../../../lib/aiClient";
 
+export const maxDuration = 30;
+
 const DOMAIN_PROMPTS = {
   roof: {
     label: "Roof",
