@@ -204,7 +204,7 @@ export default function MassUploadConsole() {
         // triage now sees the same angles the deep-dive console does, just
         // without the 3x averaging/verification pass (cost control at volume).
         const extraAngles = data.angles
-          ? Object.entries(data.angles).filter(([k]) => k.includes("roofline") || k === "overview_tight").map(([, v]) => v)
+          ? Object.entries(data.angles).filter(([k]) => k !== "overview_tight" && (k.includes("roofline") || k.startsWith("mapillary"))).map(([, v]) => v)
           : [];
         return { ...item, dataUrl: data.dataUrl, extraImages: extraAngles, log: [...item.log, `Imagery auto-fetched (${data.provider}) — ${1 + extraAngles.length} angle(s)`] };
       }
@@ -262,7 +262,7 @@ export default function MassUploadConsole() {
   const CONCURRENCY = 3;
 
   async function processOne(id) {
-    let it = { ...itemsRef.current[id], stage: "processing" };
+    let it = { ...itemsRef.current[id], stage: "processing", attempts: (itemsRef.current[id]?.attempts || 0) + 1 };
     upsert(it);
     it = await geocode(it); upsert(it);
     it = await fetchImagery(it); upsert(it);
@@ -295,13 +295,15 @@ export default function MassUploadConsole() {
   const autoBusy = useRef(false);
   useEffect(() => {
     if (!autoRun || autoBusy.current) return;
-    const pending = order.filter((id) => items[id]?.stage === "queued");
+    const stalled = (it) => it && it.stage === "done" && it.damageScore === null && !it.permitWithin10y && (it.attempts || 0) < 3;
+    const pending = order.filter((id) => items[id]?.stage === "queued" || stalled(items[id]));
     if (!pending.length) return;
     autoBusy.current = true;
     (async () => {
       setRunning(true);
       for (const id of pending) {
-        if (itemsRef.current[id]?.stage === "queued") await processOne(id);
+        const cur = itemsRef.current[id];
+        if (cur?.stage === "queued" || stalled(cur)) await processOne(id);
       }
       setRunning(false);
       autoBusy.current = false;
@@ -446,7 +448,14 @@ export default function MassUploadConsole() {
                 <div style={{ fontSize: 11.5, color: MUTE, lineHeight: 1.5 }}>
                   <div>Damage: <b style={{ color: TEXT }}>{it.damageScore ?? "—"}</b>{it.damageNotes ? <span title={it.damageNotes}> ⓘ</span> : null}</div>
                   <div title={it.permitNotes}>Permit: {it.permitWithin10y ? <b style={{ color: "#8a6bd1" }}>within 10y → low priority</b> : it.permitNotes}</div>
-                  <div style={{ fontFamily: "monospace", fontSize: 10.5 }}>{it.lat && it.lon ? `${Number(it.lat).toFixed(4)}, ${Number(it.lon).toFixed(4)}` : "no coords"} · {it.stage}</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 10.5 }}>
+                    {it.lat && it.lon ? `${Number(it.lat).toFixed(4)}, ${Number(it.lon).toFixed(4)}` : "no coords"} · {it.stage}
+                    {it.stage === "done" && it.damageScore === null && !it.permitWithin10y && (
+                      (it.attempts || 0) >= 3
+                        ? <span style={{ color: SIGNAL }}> · unscoreable after 3 attempts</span>
+                        : <span style={{ color: AMBER }}> · retrying ({it.attempts || 0}/3)</span>
+                    )}
+                  </div>
                 </div>
                 {it.stage === "done" && !it.permitWithin10y && (
                   <button onClick={() => promoteToDeepDive(it)} style={{ ...btnSecondary, width: "100%", marginTop: 8, padding: "6px 0", fontSize: 12, color: GREEN, borderColor: GREEN }}>
