@@ -52,11 +52,35 @@ export async function POST(req) {
   const googleKey = process.env.GOOGLE_MAPS_API_KEY;
   const mapboxKey = process.env.MAPBOX_TOKEN;
 
-  if (!googleKey && !mapboxKey) {
-    return Response.json({ error: "No imagery provider configured", notes: "Set GOOGLE_MAPS_API_KEY or MAPBOX_TOKEN." }, { status: 200 });
-  }
-
   const result = { angles: {}, sweep: [], notes: [] };
+
+  // KEYLESS FALLBACK: if no Google/Mapbox key is configured, pull satellite
+  // imagery from Esri's public World Imagery export endpoint — free, no key,
+  // no signup. Quality/recency varies by area vs Google, and there's no
+  // street-view equivalent, but the core pipeline (fetch tile -> AI scoring)
+  // works with ZERO keys configured.
+  if (!googleKey && !mapboxKey) {
+    try {
+      const d = 0.0008; // ~tight parcel view
+      const dCtx = 0.003; // context view
+      const esri = (delta) => `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - delta},${lat - delta},${lon + delta},${lat + delta}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&f=image`;
+      const tight = await fetchAsDataUrl(esri(d), 1);
+      if (tight) {
+        result.angles.overview_tight = tight;
+        result.dataUrl = tight;
+        result.provider = "esri-free";
+      }
+      const ctx = await fetchAsDataUrl(esri(dCtx), 1);
+      if (ctx) result.angles.overview_context = ctx;
+      if (!tight && !ctx) {
+        return Response.json({ error: "Keyless imagery fetch failed", notes: "Esri free tier unreachable. Add GOOGLE_MAPS_API_KEY or MAPBOX_TOKEN for reliable imagery." }, { status: 200 });
+      }
+      result.notes.push("Using Esri World Imagery free tier (no API key configured). Add a Google or Mapbox key for higher-recency imagery plus street-view sweep.");
+      return Response.json(result);
+    } catch (e) {
+      return Response.json({ error: "Keyless imagery error: " + e.message }, { status: 200 });
+    }
+  }
 
   // TWO overview shots at different zoom: a tight parcel-cropped shot (zoom 21,
   // as close as Google Static Maps allows — isolates the single structure

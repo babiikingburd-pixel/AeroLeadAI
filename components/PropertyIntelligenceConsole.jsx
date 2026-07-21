@@ -469,7 +469,8 @@ export default function PropertyIntelligenceConsole() {
       if (roofImage && !lowPriority) {
         try {
           const base64 = roofImage.dataUrl.split(",")[1];
-          const { finding, runs } = await runAnalystAveraged("roof", base64, roofImage.mediaType, address);
+          const images = [{ base64Image: base64, mediaType: roofImage.mediaType }];
+          const { finding, runs } = await runAnalystAveraged("roof", images, address);
           findingsScore = finding.concern_score;
           aiFindings = [{ id: uid(), at: nowIso(), results: { roof: finding }, findingsScore, source: `batch auto-scan (${runs} run${runs > 1 ? "s" : ""}, ${finding.provider})` }];
           logBatch(`   damage score ${findingsScore} (${finding.level})`);
