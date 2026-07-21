@@ -5,6 +5,10 @@
 //  3. Nominatim postalcode search — fallback if Overpass times out/empty
 //  4. Nominatim road search + generated house numbers — last resort
 // debug field in the response shows which step produced results.
+// Layers run sequentially (each is a fallback for the previous), so the
+// worst case is the sum of every layer's timeout — raise maxDuration so a
+// slow-but-not-dead upstream doesn't get killed by Vercel's default 10s.
+export const maxDuration = 45;
 
 async function fetchWithTimeout(url, opts = {}, ms = 8000) {
   const controller = new AbortController();

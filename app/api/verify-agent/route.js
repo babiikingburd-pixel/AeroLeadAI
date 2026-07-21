@@ -1,5 +1,7 @@
 import { callVisionModel, activeProvider } from "../../../lib/aiClient";
 
+export const maxDuration = 30;
+
 const DOMAIN_LABELS = { roof: "Roof", tree: "Tree", driveway: "Driveway" };
 
 export async function POST(req) {

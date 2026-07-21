@@ -3,6 +3,13 @@
 // and a full multi-vantage Street View sweep (multiple panorama points,
 // multiple headings, and multiple pitches so roofline is actually visible
 // looking up, not just flat street-level shots).
+//
+// All the individual image/metadata fetches below are independent of each
+// other, so they're issued concurrently (Promise.all) rather than one after
+// another — sequentially this route could easily issue 15-20+ round trips to
+// Google, which blows past Vercel's default serverless timeout and gets the
+// whole request killed before any imagery comes back.
+export const maxDuration = 60;
 
 function bearingBetween(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -58,27 +65,32 @@ export async function POST(req) {
 
   const result = { angles: {}, sweep: [], notes: [] };
 
-  // TWO overview shots at different zoom: a tight parcel-cropped shot (zoom 21,
-  // as close as Google Static Maps allows — isolates the single structure
-  // instead of showing 3 neighboring houses) AND a context shot (zoom 19) so
-  // the model can still see lot boundaries/neighbors when useful, without the
-  // tight shot being the only option.
+  // TWO overview shots at different zoom: a tight parcel-cropped shot (zoom 20
+  // — one below Google Static Maps' max of 21, since zoom 21 satellite tiles
+  // aren't actually rendered at that resolution in most areas and come back
+  // blurry/upscaled) AND a context shot (zoom 18) so the model can still see
+  // lot boundaries/neighbors, and so a few tens of meters of geocode error
+  // doesn't put the target parcel outside the crop entirely.
   const tightUrl = googleKey
-    ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=21&size=640x640&scale=2&maptype=satellite&key=${googleKey}`
-    : `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},20,0/640x640@2x?access_token=${mapboxKey}`;
+    ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=20&size=640x640&scale=2&maptype=satellite&key=${googleKey}`
+    : `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},19,0/640x640@2x?access_token=${mapboxKey}`;
   const contextUrl = googleKey
-    ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=19&size=640x640&scale=2&maptype=satellite&key=${googleKey}`
-    : `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},18,0/640x640@2x?access_token=${mapboxKey}`;
+    ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=18&size=640x640&scale=2&maptype=satellite&key=${googleKey}`
+    : `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/${lon},${lat},17,0/640x640@2x?access_token=${mapboxKey}`;
   // Hybrid overlay (Google only): satellite + parcel/road/label layer, which
   // is the closest free source gets to a property-line reference — actual
   // parcel polygons need county GIS, but road+label overlay at minimum shows
   // where the lot sits relative to the street, unlike bare satellite.
   const hybridUrl = googleKey
-    ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=20&size=640x640&scale=2&maptype=hybrid&key=${googleKey}`
+    ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=19&size=640x640&scale=2&maptype=hybrid&key=${googleKey}`
     : null;
 
   try {
-    const tight = await fetchAsDataUrl(tightUrl, 1);
+    const [tight, context, hybrid] = await Promise.all([
+      fetchAsDataUrl(tightUrl, 1),
+      fetchAsDataUrl(contextUrl, 1),
+      hybridUrl ? fetchAsDataUrl(hybridUrl, 1) : Promise.resolve(null),
+    ]);
     if (tight) {
       result.angles.overview_tight = tight;
       result.dataUrl = tight; // backward-compat: tight crop is now the primary
@@ -86,12 +98,8 @@ export async function POST(req) {
     } else {
       result.notes.push("Tight overview fetch failed.");
     }
-    const context = await fetchAsDataUrl(contextUrl, 1);
     if (context) result.angles.overview_context = context;
-    if (hybridUrl) {
-      const hybrid = await fetchAsDataUrl(hybridUrl, 1);
-      if (hybrid) result.angles.overview_hybrid_labeled = hybrid;
-    }
+    if (hybrid) result.angles.overview_hybrid_labeled = hybrid;
   } catch (e) {
     result.notes.push("Overview imagery error: " + e.message);
   }
@@ -99,18 +107,24 @@ export async function POST(req) {
   if (googleKey) {
     try {
       const probeBearings = [0, 90, 180, 270];
+      const metas = await Promise.all([
+        ...probeBearings.map((b) => {
+          const probe = destPoint(lat, lon, b, 40);
+          return getStreetViewMeta(probe.lat, probe.lon, googleKey);
+        }),
+        getStreetViewMeta(lat, lon, googleKey),
+      ]);
       const panoPoints = new Map();
-      for (const b of probeBearings) {
-        const probe = destPoint(lat, lon, b, 40);
-        const meta = await getStreetViewMeta(probe.lat, probe.lon, googleKey);
+      for (const meta of metas) {
         if (meta && meta.panoId && !panoPoints.has(meta.panoId)) panoPoints.set(meta.panoId, meta);
       }
-      const direct = await getStreetViewMeta(lat, lon, googleKey);
-      if (direct && direct.panoId && !panoPoints.has(direct.panoId)) panoPoints.set(direct.panoId, direct);
 
       if (panoPoints.size === 0) {
         result.notes.push("No Street View coverage found around this property.");
       } else {
+        // Build every shot request across every vantage point up front so
+        // they can all be fetched concurrently instead of one at a time.
+        const shotJobs = [];
         let panoIndex = 0;
         for (const [panoId, pano] of panoPoints) {
           panoIndex++;
@@ -125,15 +139,24 @@ export async function POST(req) {
             { label: "right_level", heading: (headingToTarget + 40) % 360, pitch: 0 },
           ];
           for (const s of shots) {
-            const url = `https://maps.googleapis.com/maps/api/streetview?size=640x480&pano=${panoId}&heading=${s.heading.toFixed(0)}&pitch=${s.pitch}&fov=75&key=${googleKey}`;
-            const img = await fetchAsDataUrl(url, 1);
-            if (img) {
-              const key = `vantage${panoIndex}_${s.label}`;
-              result.angles[key] = img;
-              result.sweep.push({ key, panoId, heading: Math.round(s.heading), pitch: s.pitch, vantageLat: pano.lat, vantageLon: pano.lon });
-            }
+            shotJobs.push({ panoIndex, panoId, pano, ...s });
           }
         }
+
+        const images = await Promise.all(
+          shotJobs.map((job) =>
+            fetchAsDataUrl(`https://maps.googleapis.com/maps/api/streetview?size=640x480&pano=${job.panoId}&heading=${job.heading.toFixed(0)}&pitch=${job.pitch}&fov=75&key=${googleKey}`, 1)
+          )
+        );
+
+        shotJobs.forEach((job, i) => {
+          const img = images[i];
+          if (!img) return;
+          const key = `vantage${job.panoIndex}_${job.label}`;
+          result.angles[key] = img;
+          result.sweep.push({ key, panoId: job.panoId, heading: Math.round(job.heading), pitch: job.pitch, vantageLat: job.pano.lat, vantageLon: job.pano.lon });
+        });
+
         result.notes.push(`Swept ${panoPoints.size} public vantage point(s), including a roofline-pitched shot per vantage (${result.sweep.length} total street-level images).`);
       }
     } catch (e) {
