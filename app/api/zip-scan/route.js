@@ -1,36 +1,39 @@
-import { callVisionModel, activeProvider } from "../../../lib/aiClient";
+// Interactive ZIP-code address scan (server-side, avoids browser CORS).
+// Pulls addressed buildings from OpenStreetMap's Overpass API — free, no key,
+// no paid parcel vendor required. Real coverage depends on how well that ZIP
+// is mapped in OSM; sparsely-mapped areas will legitimately return few/none
+// (surfaced via `error`/`debug` rather than pretending success).
+//
+// Optional USPS deliverability check (set USPS_CLIENT_ID + USPS_CLIENT_SECRET,
+// free registration at developer.usps.com): USPS has no public endpoint that
+// *lists* every address in a ZIP — that's a paid CASS-licensed bulk product,
+// not something a simple API key gets you — so this can't replace the OSM
+// scan above. What it CAN do is confirm/standardize each OSM-found address
+// against USPS's own database, which is worth having since OSM data is
+// crowd-sourced and sometimes stale or wrong. Every address is returned
+// either way; `uspsVerified` just tells you which ones USPS could confirm.
+//
+// Shared scan/validation logic lives in lib/zipScan.js — /api/auto-scan (the
+// autonomous background scanner) uses the same functions.
 
-const DOMAIN_LABELS = { roof: "Roof", tree: "Tree", driveway: "Driveway" };
+import { scanZipForAddresses, uspsValidateBatch } from "../../../lib/zipScan";
 
-export async function POST(req) {
-  try {
-    const { domain, base64Image, mediaType, finding } = await req.json();
-    const label = DOMAIN_LABELS[domain] || domain;
+export async function GET(req) {
+  const { searchParams } = new URL(req.url);
+  const zip = (searchParams.get("zip") || "").trim();
+  const max = Math.min(parseInt(searchParams.get("max"), 10) || 50, 200);
 
-    if (!activeProvider()) {
-      return Response.json({ error: "No AI provider configured. Set GROQ_API_KEY (free) or ANTHROPIC_API_KEY." }, { status: 500 });
-    }
+  const scan = await scanZipForAddresses(zip, max);
+  if (!scan.ok) return Response.json(scan);
 
-    const prompt = `You are the Verification Officer for the ${label} Supervisor. An analyst produced this finding
-on the attached image: ${JSON.stringify(finding)}.
-Independently re-examine the image. Respond ONLY with JSON, no preamble:
-{
-  "agrees": <true|false>,
-  "adjusted_score": <0-100 integer, your independent estimate>,
-  "confidence": "<low|medium|high>",
-  "flag_for_human": <true|false, true if evidence is ambiguous or stakes are high>,
-  "note": "<one sentence>"
-}`;
+  const debug = [];
+  const { verified, note } = await uspsValidateBatch(scan.addresses, zip);
+  if (note) debug.push(note);
+  const addresses = scan.addresses.map((c, i) => ({
+    address: verified[i] || c.address,
+    lat: c.lat, lon: c.lon,
+    uspsVerified: !!verified[i],
+  }));
 
-    const { text, provider } = await callVisionModel({ base64Image, mediaType, prompt });
-    const clean = text.replace(/```json|```/g, "").trim();
-
-    try {
-      return Response.json({ ...JSON.parse(clean), provider });
-    } catch {
-      return Response.json({ agrees: true, adjusted_score: finding?.concern_score, confidence: "low", flag_for_human: true, note: "Could not parse verification response.", provider });
-    }
-  } catch (e) {
-    return Response.json({ error: e?.message || "Unknown server error" }, { status: 500 });
-  }
+  return Response.json({ ok: true, zip, city: scan.city, state: scan.state, count: addresses.length, addresses, ...(debug.length ? { debug } : {}) });
 }

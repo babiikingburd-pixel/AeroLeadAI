@@ -1,0 +1,12 @@
+{
+  "appId": "com.aeroleadai.app",
+  "appName": "AeroLeadAI",
+  "webDir": "www",
+  "server": {
+    "url": "https://aero-lead-ai.vercel.app",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

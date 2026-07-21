@@ -108,6 +108,30 @@ function levelFromScore(score) {
   return "low";
 }
 
+// Converts a parcel boundary ring (array of [lon,lat] pairs) into SVG
+// polygon points, preserving true proportions — longitude degrees are
+// shorter than latitude degrees away from the equator (~30% shorter at
+// Minneapolis's latitude), so this corrects by cos(latitude) before scaling
+// uniformly. Without that correction every parcel would render visibly
+// stretched east-west.
+function parcelPolygonPoints(ring) {
+  if (!ring || ring.length < 3) return null;
+  const lats = ring.map((p) => p[1]);
+  const centerLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const lonScale = Math.cos((centerLat * Math.PI) / 180);
+  const xs = ring.map((p) => p[0] * lonScale);
+  const ys = lats;
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const span = Math.max(maxX - minX, maxY - minY) || 1e-9;
+  const pad = 15, size = 100 - 2 * pad;
+  return ring.map((_, i) => {
+    const x = pad + ((xs[i] - minX) / span) * size;
+    const y = pad + (1 - (ys[i] - minY) / span) * size; // flip Y: screen space is top-down, lat increases northward
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+}
+
 // ---------------------------------------------------------------------------
 // Storage: Supabase if NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY are set (see
 // README for the one-time table SQL), otherwise localStorage automatically.
@@ -264,11 +288,19 @@ export default function PropertyIntelligenceConsole() {
   const [memory, setMemory] = useState({});
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [running, setRunning] = useState(false);
+  const [parcelLoading, setParcelLoading] = useState(false);
+  const [parcelError, setParcelError] = useState(null);
 
   const fileRefs = { roof: useRef(null), tree: useRef(null), driveway: useRef(null) };
 
   useEffect(() => {
-    if (!supabase) { setAuthChecked(true); return; }
+    if (!supabase) {
+      // Password-gate path: remember a successful login across reloads/sessions
+      // instead of asking for the code every time.
+      try { if (localStorage.getItem("propintel:passwordAuthed") === "1") setLoggedIn(true); } catch {}
+      setAuthChecked(true);
+      return;
+    }
     supabase.auth.getSession().then(({ data }) => {
       if (data?.session) setLoggedIn(true);
       setAuthChecked(true);
@@ -278,6 +310,23 @@ export default function PropertyIntelligenceConsole() {
     });
     return () => sub?.subscription?.unsubscribe();
   }, []);
+
+  function unlockWithPassword() {
+    if (passwordInput === ACCESS_PASSWORD) {
+      try { localStorage.setItem("propintel:passwordAuthed", "1"); } catch {}
+      setLoggedIn(true);
+      setLoginError(false);
+    } else {
+      setLoginError(true);
+    }
+  }
+
+  function logOut() {
+    try { localStorage.removeItem("propintel:passwordAuthed"); } catch {}
+    if (supabase) supabase.auth.signOut();
+    setLoggedIn(false);
+    setPasswordInput("");
+  }
 
   async function sendMagicLink() {
     if (!magicEmail || !supabase) return;
@@ -365,6 +414,39 @@ export default function PropertyIntelligenceConsole() {
     setGeocoding(false);
   }
 
+  // Uses the device's own GPS via the browser's Geolocation API — no map
+  // provider, no API key, just what's already on the phone/laptop. Also
+  // reverse-geocodes the fix into a human-readable address server-side, so
+  // one tap fills in both lat/lon AND the address field.
+  function useMyLocation() {
+    if (!navigator.geolocation) {
+      setGeocodeError("This browser doesn't support device location.");
+      return;
+    }
+    setGeocoding(true);
+    setGeocodeError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = String(pos.coords.latitude), lon = String(pos.coords.longitude);
+        setAddrDraft((d) => ({ ...d, lat, lon }));
+        try {
+          const res = await fetch("/api/reverse-geocode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lon }) });
+          const data = await res.json();
+          if (data.ok) {
+            const addr = data.address || [data.houseNumber, data.street, data.city, data.state, data.zip].filter(Boolean).join(", ");
+            if (addr) setAddrDraft((d) => ({ ...d, address: addr }));
+          }
+        } catch (_) { /* lat/lon already set — address fill-in is a bonus, not required */ }
+        setGeocoding(false);
+      },
+      (err) => {
+        setGeocodeError(err.code === err.PERMISSION_DENIED ? "Location permission denied." : "Couldn't get device location.");
+        setGeocoding(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
   async function fetchImageryFor(lat, lon) {
     try {
       const res = await fetch("/api/imagery-agent", {
@@ -389,6 +471,33 @@ export default function PropertyIntelligenceConsole() {
     } catch (e) {
       return [];
     }
+  }
+
+  // Real county GIS parcel lookup (coverage: Hennepin County, MN today — see
+  // lib/parcelSources.js). Not available everywhere, and says so honestly
+  // when it isn't rather than showing nothing with no explanation.
+  async function fetchParcelBoundary() {
+    if (!current || !current.lat || !current.lon) return;
+    setParcelLoading(true);
+    setParcelError(null);
+    try {
+      const res = await fetch("/api/parcel-boundary", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: current.lat, lon: current.lon }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setParcelError(data.error || "Parcel lookup failed.");
+        setParcelLoading(false);
+        return;
+      }
+      const nextProp = { ...current, parcel: data };
+      await persistProperties({ ...properties, [current.id]: nextProp });
+      addTimeline(current.id, `Parcel boundary fetched from ${data.source} — PID ${data.parcelId || "unknown"}, ${data.areaSqFt ? Math.round(data.areaSqFt) + " sq ft" : "lot size unknown"}.`);
+    } catch (e) {
+      setParcelError("Parcel lookup failed: " + e.message);
+    }
+    setParcelLoading(false);
   }
 
   async function fetchPermitsFor(address) {
@@ -448,7 +557,11 @@ export default function PropertyIntelligenceConsole() {
             street = [{ id: uid(), kind: "overview", dataUrl: img.dataUrl, uploadedAt: nowIso(), source: `auto-fetched (${img.provider})` }];
             roofImage = { id: uid(), domain: "roof", dataUrl: img.dataUrl, mediaType: img.dataUrl.slice(5, img.dataUrl.indexOf(";")), uploadedAt: nowIso(), source: "auto-fetched satellite" };
             logBatch(`   imagery fetched (${img.provider})`);
-          } else { needsHuman.push("imagery"); logBatch(`   ⚠ ${img.notes || img.error || "no imagery"}`); }
+          } else {
+            needsHuman.push("imagery");
+            const reason = Array.isArray(img.notes) ? img.notes.join(" · ") : (img.notes || img.error || "no imagery");
+            logBatch(`   ⚠ ${reason}`);
+          }
         } catch (e) { needsHuman.push("imagery"); logBatch(`   ⚠ imagery error`); }
       }
 
@@ -465,17 +578,19 @@ export default function PropertyIntelligenceConsole() {
 
       // 4. Damage scoring on the fetched tile (skipped if deprioritized — no
       //    point spending vision tokens on a lead the 10-year rule already sank)
+      // findingsScore is a health score (higher = fewer concerns) — inverse of
+      // the raw damage/concern score — to match the deep-dive console's
+      // GREEN/AMBER/SIGNAL display convention (see runFullScan below).
       let findingsScore = null, aiFindings = [];
       if (roofImage && !lowPriority) {
         try {
           const base64 = roofImage.dataUrl.split(",")[1];
-          const { finding, runs } = await runAnalystAveraged("roof", base64, roofImage.mediaType, address);
-          findingsScore = finding.concern_score;
+          const { finding, runs } = await runAnalystAveraged("roof", [{ base64Image: base64, mediaType: roofImage.mediaType }], address);
+          findingsScore = Math.max(0, 100 - finding.concern_score);
           aiFindings = [{ id: uid(), at: nowIso(), results: { roof: finding }, findingsScore, source: `batch auto-scan (${runs} run${runs > 1 ? "s" : ""}, ${finding.provider})` }];
-          logBatch(`   damage score ${findingsScore} (${finding.level})`);
+          logBatch(`   damage score ${finding.concern_score} (${finding.level})`);
         } catch (e) { needsHuman.push("scoring"); logBatch(`   ⚠ scoring failed: ${e.message}`); }
       } else if (lowPriority) {
-        findingsScore = 0;
         logBatch(`   scoring skipped — deprioritized by permit rule`);
       }
 
@@ -833,12 +948,12 @@ export default function PropertyIntelligenceConsole() {
                 type="password"
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && (passwordInput === ACCESS_PASSWORD ? setLoggedIn(true) : setLoginError(true))}
+                onKeyDown={(e) => e.key === "Enter" && unlockWithPassword()}
                 placeholder="Access code"
                 style={{ width: "100%", padding: 12, margin: "10px 0", background: PANEL2, border: `1px solid ${LINE}`, color: "#dfe6ee", borderRadius: 8, boxSizing: "border-box" }}
               />
               <button
-                onClick={() => (passwordInput === ACCESS_PASSWORD ? setLoggedIn(true) : setLoginError(true))}
+                onClick={unlockWithPassword}
                 style={{ width: "100%", padding: 12, background: AMBER, color: "#1a1200", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}
               >
                 Enter
@@ -858,7 +973,10 @@ export default function PropertyIntelligenceConsole() {
           <div style={{ fontSize: 12, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI // MISSION CONTROL</div>
           <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>Property Intelligence</div>
         </div>
-        <a href="/batch" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Mass Upload / Batch pipeline →</a>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <a href="/batch" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Mass Upload / Batch pipeline →</a>
+          <button onClick={logOut} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: MUTE, fontSize: 13, cursor: "pointer" }}>Log out</button>
+        </div>
       </div>
 
       <div style={{ padding: 20, borderBottom: `1px solid ${LINE}` }}>
@@ -872,6 +990,9 @@ export default function PropertyIntelligenceConsole() {
         <div style={{ marginBottom: 10 }}>
           <button onClick={geocodeAddress} disabled={geocoding || !addrDraft.address} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: geocoding ? MUTE : BLUE, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
             {geocoding ? "Looking up…" : "Find coordinates from address"}
+          </button>
+          <button onClick={useMyLocation} disabled={geocoding} style={{ padding: "6px 12px", marginLeft: 8, background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: geocoding ? MUTE : GREEN, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
+            📍 Use my location
           </button>
           {geocodeError && <span style={{ fontSize: 11, color: SIGNAL, marginLeft: 8 }}>{geocodeError}</span>}
         </div>
@@ -976,6 +1097,35 @@ export default function PropertyIntelligenceConsole() {
               )}
             </div>
           )}
+
+          <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: current.parcel ? 12 : 0, flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER }}>PARCEL</div>
+              <button onClick={fetchParcelBoundary} disabled={parcelLoading || !current.lat || !current.lon} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: parcelLoading ? MUTE : BLUE, fontSize: 12, cursor: parcelLoading ? "default" : "pointer" }}>
+                {parcelLoading ? "Looking up…" : current.parcel ? "Refresh parcel boundary" : "Fetch parcel boundary"}
+              </button>
+            </div>
+            {parcelError && <div style={{ fontSize: 12, color: SIGNAL, marginTop: 8 }}>{parcelError}</div>}
+            {current.parcel && (
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 200px) 1fr", gap: 16, alignItems: "center" }}>
+                {current.parcel.geometry?.coordinates?.[0] && (
+                  <svg viewBox="0 0 100 100" style={{ width: "100%", background: "#0d1420", borderRadius: 8, border: `1px solid ${LINE}` }}>
+                    <polygon points={parcelPolygonPoints(current.parcel.geometry.coordinates[0])} fill="rgba(79,163,227,0.25)" stroke={BLUE} strokeWidth="1.5" />
+                  </svg>
+                )}
+                <div style={{ fontSize: 12, color: MUTE, lineHeight: 1.7 }}>
+                  <div>Parcel ID: <span style={{ color: "#dfe6ee" }}>{current.parcel.parcelId || "—"}</span></div>
+                  <div>Lot size: <span style={{ color: "#dfe6ee" }}>{current.parcel.areaSqFt ? `${Math.round(current.parcel.areaSqFt).toLocaleString()} sq ft (${(current.parcel.areaSqFt / 43560).toFixed(2)} ac)` : "—"}</span></div>
+                  <div>Built: <span style={{ color: "#dfe6ee" }}>{current.parcel.buildYear || "—"}</span></div>
+                  {current.parcel.owner && <div>Owner on file: <span style={{ color: "#dfe6ee" }}>{current.parcel.owner.trim()}</span></div>}
+                  <div style={{ fontSize: 10.5, marginTop: 4 }}>{current.parcel.source}</div>
+                </div>
+              </div>
+            )}
+            {!current.parcel && !parcelError && (
+              <div style={{ fontSize: 12, color: MUTE }}>No parcel data fetched yet. Coverage today: Hennepin County, MN — more counties added one at a time in lib/parcelSources.js.</div>
+            )}
+          </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16, marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
             <div>

@@ -120,10 +120,13 @@ export default function MassUploadConsole() {
           drone: [], street: [], historical: [], weather: [],
           permits: it.permitNotes && it.permitNotes !== "Not checked" ? [{ id: uid(), text: `[From batch] ${it.permitNotes}`, at: nowIso() }] : [],
           inspectionReports: [], contractorNotes: [],
-          aiFindings: it.damageScore !== null ? [{ id: uid(), at: nowIso(), results: [{ domain: "roof", concern_score: it.damageScore, notes: it.damageNotes }], findingsScore: it.damageScore }] : [],
+          aiFindings: it.damageScore !== null ? [{ id: uid(), at: nowIso(), results: [{ domain: "roof", concern_score: it.damageScore, notes: it.damageNotes }], findingsScore: Math.max(0, 100 - it.damageScore) }] : [],
           repairs: [], timeline: [{ id: uid(), at: nowIso(), text: "Promoted from batch pipeline" }],
         },
-        findingsScore: it.damageScore, suggestedActions: [],
+        // findingsScore is a health score (higher = fewer concerns) — inverse of
+        // the raw damage/concern score — to match the deep-dive console's
+        // GREEN/AMBER/SIGNAL display convention (see runFullScan).
+        findingsScore: it.damageScore !== null ? Math.max(0, 100 - it.damageScore) : null, suggestedActions: [],
       };
       localStorage.setItem("propintel:properties", JSON.stringify(props));
       upsert({ ...it, log: [...it.log, "Promoted to deep-dive console"] });
@@ -139,12 +142,13 @@ export default function MassUploadConsole() {
   const [zipScanning, setZipScanning] = useState(false);
   const [zipResult, setZipResult] = useState(null);
 
-  async function scanZip() {
-    if (!zipInput.trim()) return;
+  async function scanZip(zipOverride) {
+    const targetZip = (zipOverride || zipInput).trim();
+    if (!targetZip) return;
     setZipScanning(true);
     setZipResult(null);
     try {
-      const res = await fetch(`/api/zip-scan?zip=${zipInput.trim()}&max=${zipMax}`);
+      const res = await fetch(`/api/zip-scan?zip=${targetZip}&max=${zipMax}`);
       const data = await res.json();
       if (!data.ok) { setZipResult({ error: data.error, debug: data.debug }); setZipScanning(false); return; }
       data.addresses.forEach((a) => {
@@ -153,14 +157,50 @@ export default function MassUploadConsole() {
           lat: a.lat || null, lon: a.lon || null,
           dataUrl: null, damageScore: null, damageNotes: null,
           permitWithin10y: false, permitNotes: "Not checked",
-          stage: "queued", log: [`Imported from ZIP ${data.zip} scan`],
+          uspsVerified: a.uspsVerified ?? null,
+          stage: "queued", log: [`Imported from ZIP ${data.zip} scan`, ...(a.uspsVerified ? ["USPS-confirmed deliverable address"] : [])],
         });
       });
-      setZipResult({ count: data.count, city: data.city, state: data.state });
+      setZipResult({ count: data.count, city: data.city, state: data.state, debug: data.debug });
     } catch (e) {
       setZipResult({ error: e.message });
     }
     setZipScanning(false);
+  }
+
+  // Device GPS (browser Geolocation API — no map provider, no API key) reverse-
+  // geocoded to a ZIP via the same free Nominatim service used elsewhere, so
+  // "scan near me" works without typing a ZIP code at all.
+  function scanZipNearMe() {
+    if (!navigator.geolocation) { setZipResult({ error: "This browser doesn't support device location." }); return; }
+    setZipScanning(true);
+    setZipResult(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`, { headers: { "Accept-Language": "en" } });
+          const data = await res.json();
+          const foundZip = data?.address?.postcode?.slice(0, 5);
+          if (foundZip && /^\d{5}$/.test(foundZip)) {
+            setZipInput(foundZip);
+            setZipScanning(false);
+            scanZip(foundZip);
+          } else {
+            setZipResult({ error: "Couldn't determine a ZIP code from your location." });
+            setZipScanning(false);
+          }
+        } catch (e) {
+          setZipResult({ error: "Reverse geocode failed: " + e.message });
+          setZipScanning(false);
+        }
+      },
+      (err) => {
+        setZipResult({ error: err.code === err.PERMISSION_DENIED ? "Location permission denied." : "Couldn't get device location." });
+        setZipScanning(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   }
 
   function queueAddresses() {
@@ -208,7 +248,8 @@ export default function MassUploadConsole() {
           : [];
         return { ...item, dataUrl: data.dataUrl, extraImages: extraAngles, log: [...item.log, `Imagery auto-fetched (${data.provider}) — ${1 + extraAngles.length} angle(s)`] };
       }
-      return { ...item, log: [...item.log, data.notes || data.error || "Imagery unavailable"] };
+      const reason = Array.isArray(data.notes) ? data.notes.join(" · ") : (data.notes || data.error || "Imagery unavailable");
+      return { ...item, log: [...item.log, reason] };
     } catch { return { ...item, log: [...item.log, "Imagery fetch failed"] }; }
   }
 
@@ -349,6 +390,7 @@ export default function MassUploadConsole() {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <a href="/map" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: GREEN, fontSize: 13, textDecoration: "none" }}>🗺 View map</a>
+          <a href="/autonomous" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: AMBER, fontSize: 13, textDecoration: "none" }}>🛰️ Autonomous scan</a>
           <a href="/" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Deep-dive console →</a>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: autoRun ? GREEN : MUTE, cursor: "pointer", border: `1px solid ${autoRun ? GREEN : LINE}`, borderRadius: 6, padding: "8px 12px" }}>
             <input type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} style={{ margin: 0 }} />
@@ -387,9 +429,14 @@ export default function MassUploadConsole() {
               <option value={200}>200</option>
             </select>
           </div>
-          <button onClick={scanZip} disabled={zipScanning || zipInput.length !== 5} style={{ ...btnPrimary, width: "100%", opacity: zipScanning || zipInput.length !== 5 ? 0.5 : 1 }}>
-            {zipScanning ? "Scanning ZIP…" : "Scan ZIP code"}
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => scanZip()} disabled={zipScanning || zipInput.length !== 5} style={{ ...btnPrimary, flex: 1, opacity: zipScanning || zipInput.length !== 5 ? 0.5 : 1 }}>
+              {zipScanning ? "Scanning…" : "Scan ZIP code"}
+            </button>
+            <button onClick={scanZipNearMe} disabled={zipScanning} title="Use device GPS to find your ZIP and scan it" style={{ ...btnSecondary, opacity: zipScanning ? 0.5 : 1 }}>
+              📍 Near me
+            </button>
+          </div>
           {zipResult && (
             <div style={{ marginTop: 8, fontSize: 12, color: zipResult.error ? SIGNAL : GREEN }}>
               {zipResult.error ? `Error: ${zipResult.error}` : `✓ Queued ${zipResult.count} addresses in ${zipResult.city}, ${zipResult.state}`}
@@ -423,12 +470,22 @@ export default function MassUploadConsole() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
         {sorted.map((it) => {
           const tier = tierOf(it);
+          // Surface *why* imagery failed (bad/missing key, rate limit, no
+          // Street View coverage, etc.) instead of just "no imagery" — that
+          // reason is already captured in it.log by fetchImagery, just never
+          // shown anywhere.
+          const imageryLogLine = (it.log || []).slice().reverse().find((l) => /imagery/i.test(l));
           return (
             <div key={it.id} style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, overflow: "hidden" }}>
               <div style={{ position: "relative", height: 150, background: PANEL2 }}>
                 {it.dataUrl
                   ? <img src={it.dataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 12 }}>{it.stage === "done" ? "No imagery — manual review" : "Awaiting imagery"}</div>}
+                  : (
+                    <div title={(it.log || []).join("\n")} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 12, padding: "0 10px", textAlign: "center", gap: 4 }}>
+                      <div>{it.stage === "done" ? "No imagery — manual review" : "Awaiting imagery"}</div>
+                      {imageryLogLine && <div style={{ fontSize: 10, color: SIGNAL }}>{imageryLogLine}</div>}
+                    </div>
+                  )}
                 <span style={{ position: "absolute", top: 8, left: 8, padding: "3px 9px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", background: "rgba(13,20,32,.85)", color: TIER_COLORS[tier] }}>{tier}</span>
                 <button onClick={() => removeItem(it.id)} style={{ position: "absolute", top: 6, right: 6, background: "rgba(13,20,32,.8)", border: "none", color: TEXT, width: 22, height: 22, borderRadius: "50%", cursor: "pointer", fontSize: 13, lineHeight: 1 }}>×</button>
                 {it.dataUrl && (
@@ -438,11 +495,14 @@ export default function MassUploadConsole() {
                 )}
               </div>
               <div style={{ padding: "10px 12px" }}>
-                <input
-                  value={it.address}
-                  onChange={(e) => upsert({ ...it, address: e.target.value })}
-                  style={{ width: "100%", background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 13, fontWeight: 600, padding: "2px 0", marginBottom: 6, boxSizing: "border-box" }}
-                />
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+                  <input
+                    value={it.address}
+                    onChange={(e) => upsert({ ...it, address: e.target.value })}
+                    style={{ flex: 1, background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 13, fontWeight: 600, padding: "2px 0", boxSizing: "border-box" }}
+                  />
+                  {it.uspsVerified === true && <span title="USPS-confirmed deliverable address" style={{ fontSize: 10.5, color: GREEN, fontWeight: 700, whiteSpace: "nowrap" }}>✓ USPS</span>}
+                </div>
                 <div style={{ fontSize: 11.5, color: MUTE, lineHeight: 1.5 }}>
                   <div>Damage: <b style={{ color: TEXT }}>{it.damageScore ?? "—"}</b>{it.damageNotes ? <span title={it.damageNotes}> ⓘ</span> : null}</div>
                   <div title={it.permitNotes}>Permit: {it.permitWithin10y ? <b style={{ color: "#8a6bd1" }}>within 10y → low priority</b> : it.permitNotes}</div>
