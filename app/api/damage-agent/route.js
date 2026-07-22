@@ -1,4 +1,5 @@
 import { callVisionModel, activeProvider } from "../../../lib/aiClient";
+import { isValidImagePayload } from "../../../lib/validate";
 
 const DOMAIN_PROMPTS = {
   roof: {
@@ -32,6 +33,12 @@ export async function POST(req) {
     // instead of scoring each shot in isolation.
     const imgList = images && images.length ? images : (base64Image ? [{ base64Image, mediaType }] : []);
     if (imgList.length === 0) return Response.json({ error: "No image(s) provided." }, { status: 400 });
+    if (imgList.length > 12) return Response.json({ error: "Too many images (max 12)." }, { status: 400 });
+    for (const im of imgList) {
+      if (!isValidImagePayload(im.base64Image, im.mediaType)) {
+        return Response.json({ error: "Invalid or oversized image payload (max 8MB, image/* only)." }, { status: 400 });
+      }
+    }
 
     const multiAngleNote = imgList.length > 1
       ? `You are looking at ${imgList.length} different images of the SAME property from different angles/vantage points (satellite overview, street-level views, possibly a roofline-pitched shot). Cross-reference across all images before scoring — damage visible from one angle but not another is still real damage; note which angle(s) show which findings.`

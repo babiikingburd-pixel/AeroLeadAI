@@ -10,8 +10,13 @@ const MUTE = "#6b7c93";
 
 const TABS = [
   { href: "/", label: "Console" },
+  { href: "/discovery", label: "Discovery" },
   { href: "/batch", label: "Batch / Mass Upload" },
   { href: "/map", label: "Lead Map" },
+  { href: "/scanner", label: "Background Scanner" },
+  { href: "/jobs", label: "Jobs" },
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/crm", label: "CRM" },
 ];
 
 export default function TopNav() {

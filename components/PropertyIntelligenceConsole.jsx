@@ -1,6 +1,8 @@
 "use client";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import supabase from "../lib/supabaseClient";
+import AutoLocate from "./AutoLocate";
+import { upsertLead } from "../lib/leadStore";
 
 // ============================================================================
 // AeroLeadAI — Property Intelligence Mission Control (DEPLOYABLE VERSION)
@@ -561,6 +563,11 @@ export default function PropertyIntelligenceConsole() {
         needsHuman: needsHuman.length ? needsHuman : null,
       };
       propsAccum = { ...propsAccum, [id]: prop };
+      // Mirror into the shared lead store so Dashboard/CRM see this scan.
+      try {
+        const rf = aiFindings?.[0]?.results?.roof;
+        upsertLead({ address, lat, lon, findingsScore, confidence: rf?.confidence || null, indicators: rf?.indicators || [], notes: rf?.notes || "", imagery: roofImage ? [roofImage.dataUrl] : [], source: "console-batch" });
+      } catch {}
       await persistProperties(propsAccum);
       setBatchProgress((p) => ({ ...p, done: p.done + 1 }));
     }
@@ -657,6 +664,7 @@ export default function PropertyIntelligenceConsole() {
       findingsScore: null, suggestedActions: [],
     };
     await persistProperties({ ...properties, [id]: prop });
+    try { upsertLead({ address: addrDraft.address, lat: addrDraft.lat, lon: addrDraft.lon, source: "console" }); } catch {}
     setCurrentId(id);
     setAddrDraft({ address: "", lat: "", lon: "", parcelId: "", permitId: "", roofType: "", buildingAge: "", roofPitch: "" });
     setCreatingProperty(false);
@@ -953,6 +961,9 @@ export default function PropertyIntelligenceConsole() {
           ))}
         </div>
         <div style={{ marginBottom: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {/* Autonomous address detection: GPS -> reverse geocode -> auto-fill.
+              Falls back to ZIP-only if street can't be resolved or GPS denied. */}
+          <AutoLocate onResolved={({ address, lat, lon }) => setAddrDraft((d) => ({ ...d, address, lat, lon }))} />
           <button onClick={geocodeAddress} disabled={geocoding || !addrDraft.address} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: geocoding ? MUTE : BLUE, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
             {geocoding ? "Looking up…" : /^\d{5}$/.test(addrDraft.address.trim()) ? "Search ZIP for addresses" : "Find coordinates from address"}
           </button>

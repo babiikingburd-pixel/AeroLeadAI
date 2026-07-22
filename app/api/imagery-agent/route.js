@@ -4,22 +4,37 @@
 // multiple headings, and multiple pitches so roofline is actually visible
 // looking up, not just flat street-level shots).
 //
-// Provider fallback: tries Google (if GOOGLE_MAPS_API_KEY set) -> Mapbox (if
-// MAPBOX_TOKEN set) -> Esri World Imagery (free, no key, always available)
-// in order, moving to the next provider only if the current one's overview
-// shots both fail outright (quota exceeded, network error, etc). Whole
-// providers are swapped rather than mixing angle sources mid-response, so a
-// single response is never a patchwork of different providers' zoom levels.
+// Provider fallback: tries Nearmap (if NEARMAP_API_KEY set, premium/highest
+// recency) -> Google (if GOOGLE_MAPS_API_KEY set) -> Mapbox (if MAPBOX_TOKEN
+// set) -> Esri World Imagery (free, no key, always available) in order,
+// moving to the next provider only if the current one's overview shots both
+// fail outright (quota exceeded, network error, etc). Whole providers are
+// swapped rather than mixing angle sources mid-response, so a single
+// response is never a patchwork of different providers' zoom levels.
 //
-// Caching: when Supabase is configured (NEXT_PUBLIC_SUPABASE_URL + a key),
-// results are cached by rounded lat/lon so repeat requests for the same
-// property don't re-hit the imagery APIs. Every genuinely fresh fetch is
-// also appended to an imagery_history log (not overwritten), which is what
-// powers before/after comparison in the console. See
-// supabase_batch_leads_schema.sql for both tables. Without Supabase
-// configured, caching is skipped entirely — same as before.
+// `historical: true` additionally queries Planet (PLANET_API_KEY) for
+// date-stamped archive imagery — Google Static/Mapbox/Esri only ever serve
+// CURRENT imagery, so true before/after needs a provider that actually
+// timestamps its tiles. Honestly reports "unavailable" rather than faking a
+// comparison when no historical-capable provider is configured.
+//
+// `lite: true` skips the Street View sweep (used by high-volume batch/
+// background scanning where only the overhead shot is needed) for speed.
+//
+// Two-layer caching: a fast in-memory cache (lib/serverCache.js, 30 min,
+// per warm serverless instance) checked first, then a persistent Supabase
+// cache (imagery_cache table, 30 days, cross-device/cross-cold-start) when
+// configured. Every genuinely fresh fetch is also appended to an
+// imagery_history log (not overwritten), which is what powers before/after
+// comparison in the console. See supabase_batch_leads_schema.sql for both
+// Supabase tables. Without Supabase configured, that layer is skipped
+// entirely — same as before — but the in-memory cache still applies.
+
+import { cacheGet, cacheSet } from "../../../lib/serverCache";
+import { isValidLatLon } from "../../../lib/validate";
 
 const CACHE_TTL_MS = 30 * 24 * 3600 * 1000; // satellite/street imagery doesn't change often
+const MEM_CACHE_TTL_MS = 30 * 60 * 1000;
 
 function supabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -132,7 +147,7 @@ async function getStreetViewMeta(lat, lon, key) {
 async function tryEsri(lat, lon) {
   const result = { angles: {}, resolution: {}, notes: [] };
   const d = 0.0008, dCtx = 0.003; // tight parcel view, wider context view
-  const esri = (delta) => `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - delta},${lat - delta},${lon + delta},${lat + delta}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&f=image`;
+  const esri = (delta) => `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - delta},${lat - delta},${lon + delta},${lat + delta}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&compressionQuality=70&f=image`;
   const mppFor = (delta) => haversineMeters(lat - delta, lon, lat + delta, lon) / 640;
   const tight = await fetchAsDataUrl(esri(d), 2);
   if (tight) {
@@ -151,7 +166,17 @@ async function tryEsri(lat, lon) {
   return result;
 }
 
-async function tryGoogle(lat, lon, googleKey) {
+// Premium tier: Nearmap (highest recency/resolution). Optional — only
+// attempted when NEARMAP_API_KEY is set. Overview only, no street-view
+// equivalent, so Street View still comes from Google if that key is also set.
+async function tryNearmap(lat, lon, nearmapKey) {
+  const url = `https://api.nearmap.com/staticmap/v2/${lon},${lat}.jpg?zoom=21&size=640x640&apikey=${nearmapKey}`;
+  const img = await fetchAsDataUrl(url, 1);
+  if (!img) return null;
+  return { angles: { overview_tight: img }, sweep: [], resolution: { overview_tight: { source: "nearmap", zoom: 21 } }, notes: [], provider: "nearmap", dataUrl: img };
+}
+
+async function tryGoogle(lat, lon, googleKey, lite) {
   const result = { angles: {}, sweep: [], resolution: {}, notes: [] };
   const zoomTight = 21, zoomCtx = 19, zoomHybrid = 20, scale = 2;
   const tightUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=${zoomTight}&size=640x640&scale=${scale}&maptype=satellite&key=${googleKey}`;
@@ -170,6 +195,11 @@ async function tryGoogle(lat, lon, googleKey) {
 
   result.provider = "google";
   result.dataUrl = tight || context;
+
+  if (lite) {
+    result.notes.push("Street View sweep skipped (lite mode).");
+    return result;
+  }
 
   try {
     const probeBearings = [0, 90, 180, 270];
@@ -235,6 +265,44 @@ async function tryMapbox(lat, lon, mapboxKey) {
   return result;
 }
 
+// Provider-side historical archive query (Planet) — distinct from our OWN
+// imagery_history log above: this asks the imagery VENDOR for past dated
+// scenes, which is what makes a true "storm before/after" comparison
+// possible without having already been polling this address for months.
+// Sentinel Hub is documented as a future option but not wired to actual
+// tile fetch in this build (OAuth-only) — reported honestly, not faked.
+async function fetchHistorical(lat, lon, planetKey, sentinelId, sentinelSecret) {
+  if (planetKey) {
+    try {
+      const now = new Date(), past = new Date(now);
+      past.setFullYear(past.getFullYear() - 1);
+      const iso = (d) => d.toISOString().slice(0, 10);
+      const search = await fetch("https://api.planet.com/data/v1/quick-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `api-key ${planetKey}` },
+        body: JSON.stringify({
+          item_types: ["PSScene"],
+          filter: { type: "AndFilter", config: [
+            { type: "GeometryFilter", field_name: "geometry", config: { type: "Point", coordinates: [+lon, +lat] } },
+            { type: "DateRangeFilter", field_name: "acquired", config: { gte: iso(past) + "T00:00:00Z", lte: iso(now) + "T00:00:00Z" } },
+          ] },
+        }),
+      });
+      if (!search.ok) return { available: false, providersNote: `Planet historical search HTTP ${search.status}.` };
+      const data = await search.json();
+      const items = data.features || [];
+      const newest = items[0], oldest = items[items.length - 1];
+      return { available: items.length > 0, providersNote: `${items.length} Planet scene(s) found in the last year.`, newestDate: newest?.properties?.acquired || null, oldestDate: oldest?.properties?.acquired || null };
+    } catch (e) {
+      return { available: false, providersNote: "Planet historical error: " + e.message };
+    }
+  }
+  if (sentinelId && sentinelSecret) {
+    return { available: false, providersNote: "Sentinel Hub OAuth configured but historical tile fetch isn't wired in this build (stats API only). Use Planet for a working historical comparison today." };
+  }
+  return { available: false, providersNote: "Historical comparison needs PLANET_API_KEY (or Sentinel Hub credentials) — Google/Mapbox/Esri only serve current imagery." };
+}
+
 // History lookup for before/after comparison: GET /api/imagery-agent?lat=..&lon=..
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
@@ -256,8 +324,14 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
-  const { lat, lon, force } = await req.json();
-  if (!lat || !lon) return Response.json({ error: "lat/lon required" }, { status: 400 });
+  const { lat, lon, force, lite, historical } = await req.json();
+  if (!isValidLatLon(lat, lon)) return Response.json({ error: "Valid lat/lon required" }, { status: 400 });
+
+  const memKey = `img:${(+lat).toFixed(5)},${(+lon).toFixed(5)}:${lite ? "lite" : "full"}`;
+  if (!force) {
+    const mem = cacheGet(memKey);
+    if (mem) return Response.json({ ...mem, cached: true, cacheSource: "memory" });
+  }
 
   const supa = supabaseConfig();
   const key = cacheKeyFor(lat, lon);
@@ -265,20 +339,27 @@ export async function POST(req) {
   if (supa && !force) {
     const cached = await readCache(supa, key);
     if (cached) {
-      return Response.json({
+      const payload = {
         angles: cached.angles || {}, sweep: [], notes: [`Served from cache (fetched ${cached.fetched_at}).`],
         resolution: cached.resolution || {}, provider: cached.provider, dataUrl: (cached.angles || {}).overview_tight || null,
-        capturedDate: null, cached: true, cachedAt: cached.fetched_at,
-      });
+        capturedDate: null, cached: true, cacheSource: "supabase", cachedAt: cached.fetched_at,
+      };
+      cacheSet(memKey, payload, MEM_CACHE_TTL_MS);
+      return Response.json(payload);
     }
   }
 
+  const nearmapKey = process.env.NEARMAP_API_KEY;
   const googleKey = process.env.GOOGLE_MAPS_API_KEY;
   const mapboxKey = process.env.MAPBOX_TOKEN;
+  const planetKey = process.env.PLANET_API_KEY;
+  const sentinelId = process.env.SENTINEL_HUB_CLIENT_ID;
+  const sentinelSecret = process.env.SENTINEL_HUB_CLIENT_SECRET;
 
   let payload = null;
   const attempts = [];
-  if (googleKey) attempts.push(() => tryGoogle(lat, lon, googleKey));
+  if (nearmapKey) attempts.push(() => tryNearmap(lat, lon, nearmapKey));
+  if (googleKey) attempts.push(() => tryGoogle(lat, lon, googleKey, lite));
   if (mapboxKey) attempts.push(() => tryMapbox(lat, lon, mapboxKey));
   attempts.push(() => tryEsri(lat, lon)); // always last — free, keyless, guaranteed available
 
@@ -290,7 +371,7 @@ export async function POST(req) {
   }
 
   if (!payload) {
-    return Response.json({ error: "All imagery providers failed", notes: "Google/Mapbox/Esri all unreachable or returned no image for these coordinates." }, { status: 200 });
+    return Response.json({ error: "All imagery providers failed", notes: "All configured providers (and the Esri free fallback) were unreachable or returned no image for these coordinates." }, { status: 200 });
   }
   if (triedProviders.length) {
     payload.notes.unshift(`Fell back to ${payload.provider} after ${triedProviders.length} provider(s) failed.`);
@@ -298,7 +379,12 @@ export async function POST(req) {
   payload.capturedDate = null; // honest gap: none of these static-tile APIs expose per-image capture date
   payload.cached = false;
 
+  if (historical) {
+    payload.historical = await fetchHistorical(lat, lon, planetKey, sentinelId, sentinelSecret);
+  }
+
   if (supa) await writeCache(supa, key, lat, lon, payload);
+  cacheSet(memKey, payload, MEM_CACHE_TTL_MS);
 
   return Response.json(payload);
 }

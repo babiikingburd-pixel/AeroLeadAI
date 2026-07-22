@@ -2,9 +2,17 @@
 // US-only, no rate pain), Nominatim as fallback. Server-side so the batch loop
 // never trips CORS and never needs the user to click "Find coordinates."
 
+import { cacheGet, cacheSet } from "../../../lib/serverCache";
+import { isValidAddress } from "../../../lib/validate";
+
 export async function POST(req) {
   const { address } = await req.json();
-  if (!address) return Response.json({ ok: false, notes: "No address provided." });
+  if (!isValidAddress(address)) return Response.json({ ok: false, notes: "Valid address (3-300 chars) required." }, { status: 400 });
+  // Dedup: identical geocode requests within 15 min return the cached hit
+  // instantly and never re-hit Census/Nominatim.
+  const cacheKey = "geo:" + address.trim().toLowerCase();
+  const cached = cacheGet(cacheKey);
+  if (cached) return Response.json({ ...cached, cached: true });
 
   // 1. US Census Bureau
   try {
@@ -14,7 +22,7 @@ export async function POST(req) {
       const data = await res.json();
       const match = data?.result?.addressMatches?.[0];
       if (match) {
-        return Response.json({ ok: true, lat: String(match.coordinates.y), lon: String(match.coordinates.x), matchedAddress: match.matchedAddress, provider: "census" });
+        return Response.json(cacheSet(cacheKey, { ok: true, lat: String(match.coordinates.y), lon: String(match.coordinates.x), matchedAddress: match.matchedAddress, provider: "census" }));
       }
     }
   } catch (e) { /* fall through */ }
@@ -27,7 +35,7 @@ export async function POST(req) {
     if (res.ok) {
       const data = await res.json();
       if (data?.length) {
-        return Response.json({ ok: true, lat: data[0].lat, lon: data[0].lon, matchedAddress: data[0].display_name, provider: "nominatim" });
+        return Response.json(cacheSet(cacheKey, { ok: true, lat: data[0].lat, lon: data[0].lon, matchedAddress: data[0].display_name, provider: "nominatim" }));
       }
     }
   } catch (e) { /* fall through */ }

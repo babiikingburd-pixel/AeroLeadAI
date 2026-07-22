@@ -1,32 +1,17 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { loadLeads, importConsoleProperties } from "../lib/leadStore";
+import LeadDetailDrawer from "./LeadDetailDrawer";
 
 const SLATE = "#0d1420", PANEL = "#131c2b", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a";
-const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e", SIGNAL = "#ef5a6f";
+const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e";
 
-const TIER_COLORS = {
-  hot: "#ef5a6f",
-  warm: "#f5b942",
-  cool: "#4fa3e3",
-  cold: "#77839a",
-  "low-priority": "#8a6bd1",
-  unscored: "#444e5e",
-};
-
-const TIER_LABELS = {
-  hot: "🔴 Hot Lead",
-  warm: "🟡 Warm Lead",
-  cool: "🔵 Cool Lead",
-  cold: "⚫ Cold",
-  "low-priority": "🟣 Low Priority (permit <10y)",
-  unscored: "⬜ Not yet scored",
-};
-
-const STORE_KEY = "aerolead:batch:v1";
+const TIER_COLORS = { hot: "#ef5a6f", warm: "#f5b942", cool: "#4fa3e3", cold: "#77839a", "low-priority": "#8a6bd1", unscored: "#444e5e" };
+const TIER_LABELS = { hot: "🔴 Hot Lead", warm: "🟡 Warm Lead", cool: "🔵 Cool Lead", cold: "⚫ Cold", "low-priority": "🟣 Low Priority (permit <10y)", unscored: "⬜ Not yet scored" };
 
 function tierOf(item) {
-  if (item.permitWithin10y) return "low-priority";
-  const s = item.damageScore;
+  if (item.lowPriority) return "low-priority";
+  const s = item.findingsScore;
   if (s === null || s === undefined) return "unscored";
   if (s >= 75) return "hot";
   if (s >= 50) return "warm";
@@ -34,233 +19,218 @@ function tierOf(item) {
   return "cold";
 }
 
+const SOURCE_ID = "leads-src";
+
 export default function LeadMap() {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
-  const markersRef = useRef([]);
   const [items, setItems] = useState([]);
-  const [filter, setFilter] = useState("all");
+  const [tierFilter, setTierFilter] = useState("all");
+  const [minScore, setMinScore] = useState(0);
+  const [search, setSearch] = useState("");
+  const [heatmap, setHeatmap] = useState(false);
   const [selected, setSelected] = useState(null);
   const [mapReady, setMapReady] = useState(false);
   const [stats, setStats] = useState({});
 
-  // Load batch data from localStorage
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        const all = (saved.order || []).map((id) => saved.items?.[id]).filter(Boolean).filter((it) => it.lat && it.lon);
-        setItems(all);
-        const s = {};
-        all.forEach((it) => { const t = tierOf(it); s[t] = (s[t] || 0) + 1; });
-        setStats(s);
-      }
-    } catch {}
+  const refreshItems = useCallback(() => {
+    const leads = importConsoleProperties();
+    const withCoords = leads.filter((it) => it.lat && it.lon);
+    setItems(withCoords);
+    const s = {};
+    withCoords.forEach((it) => { const t = tierOf(it); s[t] = (s[t] || 0) + 1; });
+    setStats(s);
   }, []);
 
-  // Load Mapbox GL JS dynamically
+  useEffect(() => { refreshItems(); }, [refreshItems]);
+
   useEffect(() => {
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-    if (!token) { console.warn("NEXT_PUBLIC_MAPBOX_TOKEN not set"); return; }
-
+    if (!token) return;
     if (window.mapboxgl) { setMapReady(true); return; }
-
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = "https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css";
     document.head.appendChild(link);
-
     const script = document.createElement("script");
     script.src = "https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js";
     script.onload = () => setMapReady(true);
     document.head.appendChild(script);
   }, []);
 
-  // Init map
   useEffect(() => {
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
     if (!mapReady || !mapRef.current || mapInstance.current || !token) return;
-    // Mapbox GL JS requires a public token (pk.*). Secret tokens (sk.*) throw
-    // an unrecoverable internal error even inside try-catch.
     if (!token.startsWith("pk.")) {
-      console.warn("[LeadMap] NEXT_PUBLIC_MAPBOX_TOKEN must be a public token (pk.*), not a secret token (sk.*). Map disabled.");
+      console.warn("[LeadMap] NEXT_PUBLIC_MAPBOX_TOKEN must be a public token (pk.*). Map disabled.");
       return;
     }
     try {
       window.mapboxgl.accessToken = token;
-      mapInstance.current = new window.mapboxgl.Map({
-        container: mapRef.current,
-        style: "mapbox://styles/mapbox/dark-v11",
-        center: [-93.26, 44.98], // Twin Cities default
-        zoom: 10,
+      const map = new window.mapboxgl.Map({
+        container: mapRef.current, style: "mapbox://styles/mapbox/dark-v11",
+        center: [-93.26, 44.98], zoom: 10,
       });
-      mapInstance.current.addControl(new window.mapboxgl.NavigationControl(), "top-right");
+      map.addControl(new window.mapboxgl.NavigationControl(), "top-right");
+
+      map.on("load", () => {
+        map.addSource(SOURCE_ID, { type: "geojson", data: { type: "FeatureCollection", features: [] }, cluster: true, clusterRadius: 45, clusterMaxZoom: 14 });
+
+        map.addLayer({
+          id: "clusters", type: "circle", source: SOURCE_ID, filter: ["has", "point_count"],
+          paint: {
+            "circle-color": ["step", ["get", "point_count"], "#4fa3e3", 10, "#f5b942", 30, "#ef5a6f"],
+            "circle-radius": ["step", ["get", "point_count"], 16, 10, 22, 30, 28],
+            "circle-stroke-width": 2, "circle-stroke-color": "rgba(255,255,255,0.5)",
+          },
+        });
+        map.addLayer({ id: "cluster-count", type: "symbol", source: SOURCE_ID, filter: ["has", "point_count"],
+          layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 12 }, paint: { "text-color": "#0d1420" } });
+
+        map.addLayer({
+          id: "unclustered", type: "circle", source: SOURCE_ID, filter: ["!", ["has", "point_count"]],
+          paint: {
+            "circle-color": ["get", "color"],
+            "circle-radius": ["case", ["==", ["get", "tier"], "hot"], 9, 7],
+            "circle-stroke-width": 2, "circle-stroke-color": "rgba(255,255,255,0.7)",
+          },
+        });
+
+        map.addLayer({
+          id: "heat", type: "heatmap", source: SOURCE_ID, layout: { visibility: "none" },
+          paint: {
+            "heatmap-weight": ["interpolate", ["linear"], ["get", "score"], 0, 0.1, 100, 1],
+            "heatmap-intensity": 1,
+            "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(0,0,0,0)", 0.3, "#4fa3e3", 0.6, "#f5b942", 1, "#ef5a6f"],
+            "heatmap-radius": 30, "heatmap-opacity": 0.75,
+          },
+        }, "clusters");
+
+        map.on("click", "clusters", (e) => {
+          const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
+          const clusterId = features[0].properties.cluster_id;
+          map.getSource(SOURCE_ID).getClusterExpansionZoom(clusterId, (err, zoom) => {
+            if (err) return;
+            map.easeTo({ center: features[0].geometry.coordinates, zoom });
+          });
+        });
+        map.on("click", "unclustered", (e) => {
+          const addr = e.features[0].properties.address;
+          setItems((cur) => { const found = cur.find((it) => it.address === addr); if (found) setSelected(found); return cur; });
+        });
+        map.on("mouseenter", "unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", "unclustered", () => { map.getCanvas().style.cursor = ""; });
+        map.on("mouseenter", "clusters", () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", "clusters", () => { map.getCanvas().style.cursor = ""; });
+
+        mapInstance.current = map;
+        setMapReady((v) => v);
+      });
     } catch (e) {
       console.error("[LeadMap] Mapbox init failed:", e.message);
     }
   }, [mapReady]);
 
-  // Plot markers whenever items or filter changes
   useEffect(() => {
-    if (!mapInstance.current || !mapReady) return;
+    const map = mapInstance.current;
+    if (!map || !map.getSource || !map.getSource(SOURCE_ID)) return;
 
-    // Remove old markers
-    markersRef.current.forEach((m) => m.remove());
-    markersRef.current = [];
-
-    const visible = filter === "all" ? items : items.filter((it) => tierOf(it) === filter);
-    if (!visible.length) return;
-
-    // Fit map to bounds
-    const lons = visible.map((it) => parseFloat(it.lon));
-    const lats = visible.map((it) => parseFloat(it.lat));
-    const bounds = [[Math.min(...lons) - 0.01, Math.min(...lats) - 0.01], [Math.max(...lons) + 0.01, Math.max(...lats) + 0.01]];
-    mapInstance.current.fitBounds(bounds, { padding: 60, maxZoom: 15 });
-
-    visible.forEach((it) => {
-      const tier = tierOf(it);
-      const color = TIER_COLORS[tier];
-
-      // Custom colored dot marker
-      const el = document.createElement("div");
-      el.style.cssText = `
-        width: ${tier === "hot" ? 18 : 13}px;
-        height: ${tier === "hot" ? 18 : 13}px;
-        background: ${color};
-        border-radius: 50%;
-        border: 2px solid rgba(255,255,255,0.7);
-        cursor: pointer;
-        box-shadow: 0 0 ${tier === "hot" ? "8px 3px" : "4px 1px"} ${color}88;
-        transition: transform 0.15s;
-      `;
-      el.onmouseenter = () => { el.style.transform = "scale(1.4)"; };
-      el.onmouseleave = () => { el.style.transform = "scale(1)"; };
-
-      const marker = new window.mapboxgl.Marker({ element: el })
-        .setLngLat([parseFloat(it.lon), parseFloat(it.lat)])
-        .addTo(mapInstance.current);
-
-      el.onclick = () => setSelected(it);
-      markersRef.current.push(marker);
+    const q = search.trim().toLowerCase();
+    const visible = items.filter((it) => {
+      if (tierFilter !== "all" && tierOf(it) !== tierFilter) return false;
+      if ((it.findingsScore ?? 0) < minScore) return false;
+      if (q && !it.address?.toLowerCase().includes(q)) return false;
+      return true;
     });
-  }, [items, filter, mapReady]);
+
+    const features = visible.map((it) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [parseFloat(it.lon), parseFloat(it.lat)] },
+      properties: { address: it.address, score: it.findingsScore ?? 0, tier: tierOf(it), color: TIER_COLORS[tierOf(it)] },
+    }));
+    map.getSource(SOURCE_ID).setData({ type: "FeatureCollection", features });
+
+    if (features.length) {
+      const lons = features.map((f) => f.geometry.coordinates[0]);
+      const lats = features.map((f) => f.geometry.coordinates[1]);
+      map.fitBounds([[Math.min(...lons) - 0.01, Math.min(...lats) - 0.01], [Math.max(...lons) + 0.01, Math.max(...lats) + 0.01]], { padding: 60, maxZoom: 15 });
+    }
+  }, [items, tierFilter, minScore, search, mapReady]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !map.getLayer || !map.getLayer("heat")) return;
+    map.setLayoutProperty("heat", "visibility", heatmap ? "visible" : "none");
+    map.setLayoutProperty("clusters", "visibility", heatmap ? "none" : "visible");
+    map.setLayoutProperty("cluster-count", "visibility", heatmap ? "none" : "visible");
+    map.setLayoutProperty("unclustered", "visibility", heatmap ? "none" : "visible");
+  }, [heatmap, mapReady]);
 
   const token = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_MAPBOX_TOKEN : null;
 
   return (
     <div style={{ minHeight: "100vh", background: SLATE, color: TEXT, fontFamily: "Inter, system-ui, sans-serif", display: "flex", flexDirection: "column" }}>
-      {/* Header */}
       <div style={{ padding: "18px 24px", borderBottom: `1px solid ${LINE}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI</div>
-          <h1 style={{ fontSize: 20, margin: "4px 0 0" }}>Lead Intelligence Map</h1>
+          <h1 style={{ fontSize: 20, margin: "4px 0 0" }}>Interactive Damage Intelligence Map</h1>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <a href="/discovery" style={{ padding: "7px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>+ Discover properties</a>
           <a href="/batch" style={{ padding: "7px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>← Batch pipeline</a>
           <a href="/" style={{ padding: "7px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Deep-dive →</a>
         </div>
       </div>
 
-      {/* Stats strip */}
+      <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "12px 24px", flexWrap: "wrap", borderBottom: `1px solid ${LINE}` }}>
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search address…"
+          style={{ padding: "7px 10px", background: PANEL, border: `1px solid ${LINE}`, borderRadius: 6, color: TEXT, fontSize: 13, minWidth: 180 }} />
+        <label style={{ fontSize: 12, color: MUTE, display: "flex", alignItems: "center", gap: 6 }}>
+          Min score
+          <input type="range" min={0} max={100} value={minScore} onChange={(e) => setMinScore(+e.target.value)} />
+          <span style={{ color: TEXT }}>{minScore}</span>
+        </label>
+        <label style={{ fontSize: 12, color: MUTE, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+          <input type="checkbox" checked={heatmap} onChange={(e) => setHeatmap(e.target.checked)} /> Heat map
+        </label>
+        <button onClick={refreshItems} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: GREEN, fontSize: 12, cursor: "pointer" }}>↻ Refresh</button>
+      </div>
+
       <div style={{ display: "flex", gap: 10, padding: "12px 24px", overflowX: "auto" }}>
         {Object.entries(TIER_COLORS).map(([tier, color]) => (
-          <button key={tier} onClick={() => setFilter(filter === tier ? "all" : tier)}
-            style={{ padding: "8px 14px", borderRadius: 20, border: `2px solid ${filter === tier || filter === "all" ? color : LINE}`, background: filter === tier ? color + "22" : "transparent", color: filter === tier ? color : MUTE, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+          <button key={tier} onClick={() => setTierFilter(tierFilter === tier ? "all" : tier)}
+            style={{ padding: "8px 14px", borderRadius: 20, border: `2px solid ${tierFilter === tier || tierFilter === "all" ? color : LINE}`, background: tierFilter === tier ? color + "22" : "transparent", color: tierFilter === tier ? color : MUTE, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
             {TIER_LABELS[tier]} {stats[tier] ? `(${stats[tier]})` : "(0)"}
           </button>
         ))}
-        {filter !== "all" && (
-          <button onClick={() => setFilter("all")} style={{ padding: "8px 14px", borderRadius: 20, border: `1px solid ${LINE}`, background: "transparent", color: TEXT, fontSize: 12, cursor: "pointer" }}>Show all</button>
+        {tierFilter !== "all" && (
+          <button onClick={() => setTierFilter("all")} style={{ padding: "8px 14px", borderRadius: 20, border: `1px solid ${LINE}`, background: "transparent", color: TEXT, fontSize: 12, cursor: "pointer" }}>Show all</button>
         )}
       </div>
 
-      {/* Map + sidebar */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+      <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
         <div ref={mapRef} style={{ flex: 1, minHeight: 500 }} />
 
-        {/* Selected property sidebar */}
-        {selected && (
-          <div style={{ width: 280, background: PANEL, borderLeft: `1px solid ${LINE}`, padding: 18, overflowY: "auto", flexShrink: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-              <b style={{ fontSize: 13 }}>Property Detail</b>
-              <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", color: MUTE, cursor: "pointer", fontSize: 18 }}>×</button>
-            </div>
-            <div style={{ fontSize: 11, color: MUTE, marginBottom: 4 }}>ADDRESS</div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, lineHeight: 1.4 }}>{selected.address}</div>
+        {!token && (
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 24, textAlign: "center", maxWidth: 340 }}>
+            <div style={{ fontSize: 24, marginBottom: 8 }}>🗺️</div>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Map needs NEXT_PUBLIC_MAPBOX_TOKEN</div>
+            <div style={{ fontSize: 13, color: MUTE }}>Add your Mapbox public token (pk.*) as NEXT_PUBLIC_MAPBOX_TOKEN in Vercel environment variables and redeploy.</div>
+          </div>
+        )}
 
-            {selected.dataUrl && (
-              <img src={selected.dataUrl} alt="" style={{ width: "100%", borderRadius: 8, marginBottom: 12, objectFit: "cover", height: 140 }} />
-            )}
-
-            <div style={{ background: TIER_COLORS[tierOf(selected)] + "22", border: `1px solid ${TIER_COLORS[tierOf(selected)]}`, borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
-              <div style={{ color: TIER_COLORS[tierOf(selected)], fontWeight: 700, fontSize: 13 }}>{TIER_LABELS[tierOf(selected)]}</div>
-              {selected.damageScore !== null && selected.damageScore !== undefined && (
-                <div style={{ fontSize: 12, color: TEXT, marginTop: 4 }}>Damage score: {selected.damageScore}</div>
-              )}
-            </div>
-
-            {selected.damageNotes && (
-              <div style={{ fontSize: 12, color: MUTE, marginBottom: 12, lineHeight: 1.5 }}>{selected.damageNotes}</div>
-            )}
-
-            <div style={{ fontSize: 11, color: MUTE, marginBottom: 4 }}>PERMIT STATUS</div>
-            <div style={{ fontSize: 12, marginBottom: 16, color: selected.permitWithin10y ? "#8a6bd1" : TEXT }}>{selected.permitNotes}</div>
-
-            <div style={{ fontSize: 11, color: MUTE, fontFamily: "monospace" }}>
-              {selected.lat && selected.lon ? `${Number(selected.lat).toFixed(5)}, ${Number(selected.lon).toFixed(5)}` : "No coords"}
-            </div>
-
-            <a href="/" onClick={() => {
-              try {
-                const raw = localStorage.getItem("propintel:properties");
-                const props = raw ? JSON.parse(raw) : {};
-                const id = Math.random().toString(36).slice(2);
-                props[id] = {
-                  id, address: selected.address, lat: selected.lat, lon: selected.lon,
-                  parcelId: "", permitId: "", roofType: "", buildingAge: "", roofPitch: "",
-                  createdAt: new Date().toISOString(),
-                  folders: { images: selected.dataUrl ? [{ id, domain: "roof", dataUrl: selected.dataUrl, mediaType: "image/jpeg", uploadedAt: new Date().toISOString() }] : [], drone: [], street: [], historical: [], weather: [], permits: [], inspectionReports: [], contractorNotes: [], aiFindings: [], repairs: [], timeline: [] },
-                  findingsScore: selected.damageScore, suggestedActions: [],
-                };
-                localStorage.setItem("propintel:properties", JSON.stringify(props));
-              } catch (err) {
-                // Quota exceeded — retry without the image
-                try {
-                  const raw2 = localStorage.getItem("propintel:properties");
-                  const props2 = raw2 ? JSON.parse(raw2) : {};
-                  const id2 = Math.random().toString(36).slice(2);
-                  props2[id2] = {
-                    id: id2, address: selected.address, lat: selected.lat, lon: selected.lon,
-                    parcelId: "", permitId: "", roofType: "", buildingAge: "", roofPitch: "",
-                    createdAt: new Date().toISOString(),
-                    folders: { images: [], drone: [], street: [], historical: [], weather: [], permits: [], inspectionReports: [], contractorNotes: [], aiFindings: [], repairs: [], timeline: [] },
-                    findingsScore: selected.damageScore, suggestedActions: [],
-                  };
-                  localStorage.setItem("propintel:properties", JSON.stringify(props2));
-                } catch {}
-              }
-            }} style={{ display: "block", marginTop: 14, padding: "9px 0", background: GREEN, color: "#0d1420", borderRadius: 6, fontWeight: 700, textAlign: "center", fontSize: 13, textDecoration: "none" }}>
-              Open in deep-dive →
-            </a>
+        {items.length === 0 && token && (
+          <div style={{ position: "absolute", top: "55%", left: "40%", transform: "translate(-50%,-50%)", textAlign: "center", color: MUTE }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>📍</div>
+            <div>No scored leads yet.</div>
+            <a href="/discovery" style={{ color: BLUE, fontSize: 14 }}>Discover properties →</a>
           </div>
         )}
       </div>
 
-      {!token && (
-        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 24, textAlign: "center", maxWidth: 340 }}>
-          <div style={{ fontSize: 24, marginBottom: 8 }}>🗺️</div>
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Map needs NEXT_PUBLIC_MAPBOX_TOKEN</div>
-          <div style={{ fontSize: 13, color: MUTE }}>Add your Mapbox token as NEXT_PUBLIC_MAPBOX_TOKEN in Vercel environment variables and redeploy.</div>
-        </div>
-      )}
-
-      {items.length === 0 && (
-        <div style={{ position: "absolute", top: "55%", left: "40%", transform: "translate(-50%,-50%)", textAlign: "center", color: MUTE }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>📍</div>
-          <div>No scored leads yet — run the batch pipeline first.</div>
-          <a href="/batch" style={{ color: BLUE, fontSize: 14 }}>Go to batch pipeline →</a>
-        </div>
+      {selected && (
+        <LeadDetailDrawer lead={selected} onClose={() => setSelected(null)}
+          onChange={() => { refreshItems(); setSelected((cur) => cur && items.find((it) => it.address === cur.address)); }} />
       )}
     </div>
   );

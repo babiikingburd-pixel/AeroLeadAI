@@ -10,6 +10,8 @@
 // running the fallback layers in PARALLEL instead of sequentially so total
 // wall time is bounded by the slowest single call, not the sum of all of them.
 
+import { cacheGet, cacheSet } from "../../../lib/serverCache";
+
 export const maxDuration = 45; // extend past the platform default so slow
 // upstream geocoding APIs (Overpass especially) get a real chance to respond
 
@@ -121,8 +123,14 @@ export async function GET(req) {
   const debug = [];
 
   if (!zip || zip.length !== 5) {
-    return Response.json({ ok: false, error: "Valid 5-digit ZIP required." });
+    return Response.json({ ok: false, error: "Valid 5-digit ZIP required." }, { status: 400 });
   }
+
+  // Cached ZIP discovery (30 min): repeat scans of the same ZIP are instant
+  // and never re-hit Overpass/Nominatim.
+  const zipCacheKey = `zip:${zip}:${max}`;
+  const zipCached = cacheGet(zipCacheKey);
+  if (zipCached) return Response.json({ ...zipCached, cached: true });
 
   let city = "", state = "", centerLat = null, centerLon = null;
   try {
@@ -185,8 +193,8 @@ export async function GET(req) {
     });
   }
 
-  return Response.json({
+  return Response.json(cacheSet(zipCacheKey, {
     ok: true, zip, city: city || "Unknown", state: state || "",
     centerLat, centerLon, count: addresses.length, addresses, debug,
-  });
+  }, 30 * 60 * 1000));
 }
