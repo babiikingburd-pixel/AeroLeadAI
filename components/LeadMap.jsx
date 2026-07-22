@@ -81,14 +81,24 @@ export default function LeadMap() {
   useEffect(() => {
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
     if (!mapReady || !mapRef.current || mapInstance.current || !token) return;
-    window.mapboxgl.accessToken = token;
-    mapInstance.current = new window.mapboxgl.Map({
-      container: mapRef.current,
-      style: "mapbox://styles/mapbox/dark-v11",
-      center: [-93.26, 44.98], // Twin Cities default
-      zoom: 10,
-    });
-    mapInstance.current.addControl(new window.mapboxgl.NavigationControl(), "top-right");
+    // Mapbox GL JS requires a public token (pk.*). Secret tokens (sk.*) throw
+    // an unrecoverable internal error even inside try-catch.
+    if (!token.startsWith("pk.")) {
+      console.warn("[LeadMap] NEXT_PUBLIC_MAPBOX_TOKEN must be a public token (pk.*), not a secret token (sk.*). Map disabled.");
+      return;
+    }
+    try {
+      window.mapboxgl.accessToken = token;
+      mapInstance.current = new window.mapboxgl.Map({
+        container: mapRef.current,
+        style: "mapbox://styles/mapbox/dark-v11",
+        center: [-93.26, 44.98], // Twin Cities default
+        zoom: 10,
+      });
+      mapInstance.current.addControl(new window.mapboxgl.NavigationControl(), "top-right");
+    } catch (e) {
+      console.error("[LeadMap] Mapbox init failed:", e.message);
+    }
   }, [mapReady]);
 
   // Plot markers whenever items or filter changes

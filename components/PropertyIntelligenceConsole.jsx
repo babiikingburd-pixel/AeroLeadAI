@@ -1,10 +1,6 @@
 "use client";
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-const SUPABASE_URL = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_URL : null;
-const SUPABASE_ANON_KEY = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY : null;
-const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+import supabase from "../lib/supabaseClient";
 
 // ============================================================================
 // AeroLeadAI — Property Intelligence Mission Control (DEPLOYABLE VERSION)
@@ -35,12 +31,6 @@ const PANEL = "#141b26";
 const PANEL2 = "#1a2330";
 const LINE = "#232f3e";
 const MUTE = "#6b7c93";
-
-// Simple shared-password gate for early sharing/demos. This is NOT real
-// auth — anyone with the password sees the same data. Set your own value
-// here before deploying, and treat this as a placeholder until real
-// per-user auth (e.g. via Supabase Auth) is wired in.
-const ACCESS_PASSWORD = "aero2026";
 
 const STATUS = {
   idle: { color: GREEN, label: "Idle", dot: "🟢" },
@@ -79,7 +69,11 @@ function fileToBase64(file) {
 // driveway damage is visible well under full phone-camera resolution, and
 // this cuts vision token usage substantially — important on Groq's free
 // tier, still a good idea on Claude to keep costs down.
-function compressImage(file, maxDim = 900, quality = 0.75) {
+// Default 1280/0.85 — deliberately mid-range. 1600/0.92 (the previous
+// default) is fine on Anthropic but risks Groq free-tier rate limits and the
+// 20MB request cap when a multi-angle sweep sends 5 images at once. Raise it
+// in Advanced settings when running on Claude if you want maximum detail.
+function compressImage(file, maxDim = 1280, quality = 0.85) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const reader = new FileReader();
@@ -164,15 +158,15 @@ async function runAnalyst(domain, images, address) {
   return data;
 }
 
-async function runAnalystAveraged(domain, images, address, onRunLog) {
+async function runAnalystAveraged(domain, images, address, onRunLog, forceMultiRun = false) {
   const first = await runAnalyst(domain, images, address);
 
   // Multi-run averaging triples token usage per analysis — Groq's free tier
   // (30,000 tokens/minute) can't absorb that across a 4-supervisor scan.
   // Only average on Claude, where the paid tier has real headroom for it.
-  if (first.provider === "groq") return { finding: first, runs: 1 };
+  if (first.provider === "groq" && !forceMultiRun) return { finding: first, runs: 1 };
 
-  const borderline = first.confidence === "low" || (first.concern_score >= 20 && first.concern_score <= 80);
+  const borderline = forceMultiRun || first.confidence === "low" || (first.concern_score >= 20 && first.concern_score <= 80);
   if (!borderline) return { finding: first, runs: 1 };
 
   const second = await runAnalyst(domain, images, address);
@@ -213,21 +207,53 @@ async function runWeatherAnalyst(lat, lon) {
 }
 
 function runStructuralAnalyst(weather, buildingAge, roofPitch) {
-  // Still a rule-based estimate — no real load rating, snow-water-equivalent,
-  // or engineering data source wired in. Roof pitch now factors in because
-  // low-slope roofs hold snow load far longer than steep ones, which is one
-  // of the biggest real drivers of actual risk.
-  let score = 10;
-  if (weather.snowPeriods >= 3) score += 35;
-  else if (weather.snowPeriods >= 1) score += 15;
+  // Still a rule-based estimate — no real load rating or snow-water-
+  // equivalent data source wired in (see notes below on NOHRSC/SNODAS for
+  // the next real upgrade). But this now separates two different failure
+  // modes that used to be blended into one score:
+  //
+  //   1. Roof structural load — raw weight risk. Driven by accumulation
+  //      signal (snowPeriods) + building age + roof pitch (low-slope roofs
+  //      hold snow far longer than steep ones).
+  //   2. Gutter / ice-dam risk — driven by freeze-thaw cycling and active
+  //      NWS ice/winter alerts, which is a DIFFERENT physical process
+  //      (meltwater refreezing at the eave, backing up under shingles) and
+  //      can be the bigger risk even in a low-snowfall winter.
   const age = Number(buildingAge) || 0;
-  if (age >= 40) score += 25;
-  else if (age >= 20) score += 12;
   const pitch = (roofPitch || "").toLowerCase();
-  if (pitch.includes("low")) score += 15;
-  else if (pitch.includes("steep")) score -= 10;
-  score = Math.max(0, Math.min(100, score));
-  return { concern_score: score, level: levelFromScore(score), confidence: "low", notes: "Rule-based estimate (weather + age + pitch) — not a substitute for a structural engineer." };
+
+  let loadScore = 10;
+  if (weather.snowPeriods >= 3) loadScore += 35;
+  else if (weather.snowPeriods >= 1) loadScore += 15;
+  if (age >= 40) loadScore += 25;
+  else if (age >= 20) loadScore += 12;
+  if (pitch.includes("low")) loadScore += 15;
+  else if (pitch.includes("steep")) loadScore -= 10;
+  loadScore = Math.max(0, Math.min(100, loadScore));
+
+  let iceDamScore = 5;
+  if (weather.freezeThawSignal) iceDamScore += 30;
+  const winterAlerts = weather.activeWinterAlerts || [];
+  if (winterAlerts.some((a) => /ice storm/i.test(a))) iceDamScore += 35;
+  else if (winterAlerts.length) iceDamScore += 15;
+  if (age >= 30) iceDamScore += 15; // older gutters/flashing more likely compromised already
+  if (pitch.includes("low")) iceDamScore += 10; // low-slope eaves shed meltwater more slowly
+  iceDamScore = Math.max(0, Math.min(100, iceDamScore));
+
+  const overall = Math.max(loadScore, iceDamScore);
+  const notesParts = [];
+  if (winterAlerts.length) notesParts.push(`Active NWS alert(s): ${winterAlerts.join(", ")}.`);
+  if (weather.freezeThawSignal) notesParts.push("Freeze-thaw cycling detected in forecast — ice dam conditions.");
+  notesParts.push("Rule-based estimate (weather + age + pitch) — not a substitute for a structural engineer or a real snow-water-equivalent reading.");
+
+  return {
+    concern_score: overall,
+    level: levelFromScore(overall),
+    confidence: "low",
+    loadScore,
+    iceDamScore,
+    notes: notesParts.join(" "),
+  };
 }
 
 async function runSnowVerification(weatherSummary, structural) {
@@ -244,14 +270,6 @@ async function runSnowVerification(weatherSummary, structural) {
 // Main component
 // ---------------------------------------------------------------------------
 export default function PropertyIntelligenceConsole() {
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [passwordInput, setPasswordInput] = useState("");
-  const [loginError, setLoginError] = useState(false);
-  const [authChecked, setAuthChecked] = useState(false);
-  const [magicEmail, setMagicEmail] = useState("");
-  const [magicSent, setMagicSent] = useState(false);
-  const [magicError, setMagicError] = useState(null);
-
   const [properties, setProperties] = useState({});
   const [currentId, setCurrentId] = useState(null);
   const [loaded, setLoaded] = useState(false);
@@ -266,26 +284,28 @@ export default function PropertyIntelligenceConsole() {
   const [running, setRunning] = useState(false);
 
   const fileRefs = { roof: useRef(null), tree: useRef(null), driveway: useRef(null) };
+  const recognitionRef = useRef(null);
 
-  useEffect(() => {
-    if (!supabase) { setAuthChecked(true); return; }
-    supabase.auth.getSession().then(({ data }) => {
-      if (data?.session) setLoggedIn(true);
-      setAuthChecked(true);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setLoggedIn(!!session);
-    });
-    return () => sub?.subscription?.unsubscribe();
-  }, []);
+  // Advanced settings
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedSettings, setAdvancedSettings] = useState({
+    imageMaxDim: 1280,
+    imageQuality: 0.85,
+    forceMultiRun: false,
+    skipVerification: false,
+  });
 
-  async function sendMagicLink() {
-    if (!magicEmail || !supabase) return;
-    setMagicError(null);
-    const { error } = await supabase.auth.signInWithOtp({ email: magicEmail });
-    if (error) setMagicError(error.message);
-    else setMagicSent(true);
-  }
+  // Voice input
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [handsFreeMode, setHandsFreeMode] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+
+  // ZIP address suggestions
+  const [zipSuggestions, setZipSuggestions] = useState([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  // Per-domain angle review state (populated after each scan)
+  const [angleReview, setAngleReview] = useState({});
 
   useEffect(() => {
     (async () => {
@@ -305,31 +325,82 @@ export default function PropertyIntelligenceConsole() {
     await storage.set("propintel:memory", JSON.stringify(next));
   }, []);
 
+  // Voice input — Web Speech API, hands-free continuous mode
+  function startVoice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Voice input not supported in this browser (try Chrome)."); return; }
+    const rec = new SR();
+    rec.continuous = handsFreeMode;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.onresult = (e) => {
+      const interim = Array.from(e.results).map((r) => r[0].transcript).join(" ");
+      setVoiceTranscript(interim);
+      const finals = Array.from(e.results).filter((r) => r.isFinal).map((r) => r[0].transcript).join(" ");
+      if (finals) {
+        setAddrDraft((d) => ({ ...d, address: finals.trim() }));
+        setVoiceTranscript("");
+        if (handsFreeMode) {
+          // Auto-trigger geocode in hands-free mode
+          setTimeout(() => geocodeAddress(), 400);
+        } else {
+          rec.stop();
+          setVoiceActive(false);
+        }
+      }
+    };
+    rec.onerror = () => { setVoiceActive(false); };
+    rec.onend = () => { if (!handsFreeMode) setVoiceActive(false); };
+    recognitionRef.current = rec;
+    rec.start();
+    setVoiceActive(true);
+  }
+
+  function stopVoice() {
+    recognitionRef.current?.stop();
+    setVoiceActive(false);
+    setVoiceTranscript("");
+  }
+
   function blankFolders() {
     return { images: [], drone: [], street: [], historical: [], weather: [], permits: [], inspectionReports: [], contractorNotes: [], aiFindings: [], repairs: [], timeline: [] };
+  }
+
+  async function fetchZipSuggestions(zip) {
+    setLoadingSuggestions(true);
+    setZipSuggestions([]);
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?postalcode=${zip}&countrycodes=us&format=json&addressdetails=1&limit=15`,
+        { headers: { "Accept-Language": "en" } }
+      );
+      const data = await res.json();
+      if (data?.length) {
+        const suggestions = data.map((d) => ({
+          label: d.display_name,
+          lat: d.lat,
+          lon: d.lon,
+        }));
+        setZipSuggestions(suggestions);
+      } else {
+        setZipSuggestions([]);
+      }
+    } catch {}
+    setLoadingSuggestions(false);
   }
 
   async function geocodeAddress() {
     if (!addrDraft.address) return;
     setGeocoding(true);
     setGeocodeError(null);
+    setZipSuggestions([]);
     const q = addrDraft.address.trim();
     const isZipOnly = /^\d{5}$/.test(q);
 
     try {
       if (isZipOnly) {
-        // ZIP-only input: resolve to the ZIP's centroid via Zippopotam (accurate, free)
-        const zRes = await fetch(`https://api.zippopotam.us/us/${q}`);
-        if (zRes.ok) {
-          const z = await zRes.json();
-          const place = z.places?.[0];
-          if (place) {
-            setAddrDraft((d) => ({ ...d, lat: place.latitude, lon: place.longitude }));
-            setGeocoding(false);
-            return;
-          }
-        }
-        setGeocodeError("ZIP not found — enter a full address or lat/lon manually.");
+        // ZIP-only: fetch address suggestions instead of just the centroid
+        await fetchZipSuggestions(q);
         setGeocoding(false);
         return;
       }
@@ -639,7 +710,7 @@ export default function PropertyIntelligenceConsole() {
   async function uploadImage(domain, e) {
     const f = e.target.files?.[0];
     if (!f || !current) return;
-    const { dataUrl, mediaType } = await compressImage(f);
+    const { dataUrl, mediaType } = await compressImage(f, advancedSettings.imageMaxDim, advancedSettings.imageQuality);
     const entry = { id: uid(), domain, dataUrl, mediaType, uploadedAt: nowIso() };
     const nextProp = { ...current, folders: { ...current.folders, images: [entry, ...current.folders.images] } };
     persistProperties({ ...properties, [current.id]: nextProp });
@@ -658,6 +729,7 @@ export default function PropertyIntelligenceConsole() {
 
   async function runDomainSupervisor(domain) {
     const scoutId = `${domain}-scout`, analystId = `${domain}-analyst`, verifyId = `${domain}-verify`;
+    const { forceMultiRun, skipVerification } = advancedSettings;
     const manualImages = current.folders.images.filter((im) => im.domain === domain);
 
     setStatus(scoutId, "working");
@@ -702,7 +774,13 @@ export default function PropertyIntelligenceConsole() {
     setStatus(scoutId, "idle");
     setStatus(analystId, "working");
     const t0 = performance.now();
-    const { finding, runs: analystRuns } = await runAnalystAveraged(domain, scoreSet.map((s) => ({ base64Image: s.base64Image, mediaType: s.mediaType })), current.address);
+    const { finding, runs: analystRuns } = await runAnalystAveraged(
+      domain,
+      scoreSet.map((s) => ({ base64Image: s.base64Image, mediaType: s.mediaType })),
+      current.address,
+      null,
+      forceMultiRun,
+    );
     const t1 = performance.now();
     setStatus(analystId, "idle");
     logMemory(analystId, {
@@ -713,16 +791,34 @@ export default function PropertyIntelligenceConsole() {
       cost: 0.015 * analystRuns * scoreSet.length,
     });
 
-    setStatus(verifyId, "working");
-    const t2 = performance.now();
-    const verification = await runVerification(domain, img.dataUrl.split(",")[1], img.mediaType, finding);
-    const t3 = performance.now();
-    const finalScore = verification.adjusted_score ?? finding.concern_score;
-    setStatus(verifyId, verification.flag_for_human ? "review" : "idle");
-    logMemory(verifyId, { confidence: verification.confidence, processingTimeMs: Math.round(t3 - t2), evidence: `${verification.note}${verification.provider ? ` [${verification.provider}]` : ""}`, images: [img.dataUrl], cost: 0.015 });
+    // Store per-angle thumbnails so the review panel can display them
+    setAngleReview((prev) => ({
+      ...prev,
+      [domain]: {
+        images: scoreSet.map((s) => ({ dataUrl: s.ref.dataUrl, kind: s.ref.kind || s.ref.domain || "image" })),
+        score: finding.concern_score,
+        runs: analystRuns,
+        confidence: finding.confidence,
+      },
+    }));
 
-    addTimeline(current.id, `${DOMAIN_LABELS[domain]} Supervisor: concern score ${finalScore} (${levelFromScore(finalScore)})${verification.flag_for_human ? " — flagged for human review" : ""}.`);
-    return { domain, ok: true, score: finalScore, level: levelFromScore(finalScore), finding, verification, flagged: !!verification.flag_for_human };
+    let finalScore = finding.concern_score;
+    let verification = null;
+
+    if (!skipVerification) {
+      setStatus(verifyId, "working");
+      const t2 = performance.now();
+      verification = await runVerification(domain, img.dataUrl.split(",")[1], img.mediaType, finding);
+      const t3 = performance.now();
+      finalScore = verification.adjusted_score ?? finding.concern_score;
+      setStatus(verifyId, verification.flag_for_human ? "review" : "idle");
+      logMemory(verifyId, { confidence: verification.confidence, processingTimeMs: Math.round(t3 - t2), evidence: `${verification.note}${verification.provider ? ` [${verification.provider}]` : ""}`, images: [img.dataUrl], cost: 0.015 });
+    } else {
+      setStatus(verifyId, "idle");
+    }
+
+    addTimeline(current.id, `${DOMAIN_LABELS[domain]} Supervisor: concern score ${finalScore} (${levelFromScore(finalScore)})${verification?.flag_for_human ? " — flagged for human review" : ""}${skipVerification ? " [verification skipped]" : ""}.`);
+    return { domain, ok: true, score: finalScore, level: levelFromScore(finalScore), finding, verification, flagged: !!verification?.flag_for_human };
   }
 
   async function runSnowSupervisor() {
@@ -747,7 +843,7 @@ export default function PropertyIntelligenceConsole() {
     setStatus("snow-verify", verification.flag_for_human ? "review" : "idle");
     logMemory("snow-verify", { confidence: verification.agrees ? "medium" : "low", processingTimeMs: Math.round(t5 - t4), evidence: verification.note, cost: 0.01 });
 
-    addTimeline(current.id, `Snow Load Supervisor: concern score ${structural.concern_score} (${structural.level}) — ${weather.summary}${verification.flag_for_human ? " — flagged for human review" : ""}.`);
+    addTimeline(current.id, `Snow Load Supervisor: roof load ${structural.loadScore} / gutter-ice-dam ${structural.iceDamScore} (overall ${structural.level}) — ${weather.summary}${verification.flag_for_human ? " — flagged for human review" : ""}.`);
     return { domain: "snow", ok: true, score: structural.concern_score, level: structural.level, weather, structural, verification, flagged: !!verification.flag_for_human };
   }
 
@@ -799,68 +895,54 @@ export default function PropertyIntelligenceConsole() {
 
   const agentDetail = selectedAgent ? memory[selectedAgent] : null;
 
-  if (!authChecked) return null;
-
-  if (!loggedIn) {
-    return (
-      <div style={{ position: "fixed", inset: 0, background: SLATE, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Inter, system-ui, sans-serif" }}>
-        <div style={{ background: PANEL, padding: 40, borderRadius: 16, width: 340, textAlign: "center", border: `1px solid ${LINE}` }}>
-          <div style={{ fontSize: 11, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI</div>
-          <h1 style={{ color: "#dfe6ee", fontSize: 20, margin: "6px 0 16px" }}>Property Intelligence</h1>
-
-          {supabase ? (
-            magicSent ? (
-              <p style={{ color: GREEN, fontSize: 13 }}>Check your email for a sign-in link.</p>
-            ) : (
-              <>
-                <input
-                  type="email"
-                  value={magicEmail}
-                  onChange={(e) => setMagicEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
-                  placeholder="you@company.com"
-                  style={{ width: "100%", padding: 12, margin: "10px 0", background: PANEL2, border: `1px solid ${LINE}`, color: "#dfe6ee", borderRadius: 8, boxSizing: "border-box" }}
-                />
-                <button onClick={sendMagicLink} style={{ width: "100%", padding: 12, background: AMBER, color: "#1a1200", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>
-                  Send sign-in link
-                </button>
-                {magicError && <p style={{ color: SIGNAL, fontSize: 12, marginTop: 10 }}>{magicError}</p>}
-              </>
-            )
-          ) : (
-            <>
-              <p style={{ color: MUTE, fontSize: 13 }}>Enter access code</p>
-              <input
-                type="password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && (passwordInput === ACCESS_PASSWORD ? setLoggedIn(true) : setLoginError(true))}
-                placeholder="Access code"
-                style={{ width: "100%", padding: 12, margin: "10px 0", background: PANEL2, border: `1px solid ${LINE}`, color: "#dfe6ee", borderRadius: 8, boxSizing: "border-box" }}
-              />
-              <button
-                onClick={() => (passwordInput === ACCESS_PASSWORD ? setLoggedIn(true) : setLoginError(true))}
-                style={{ width: "100%", padding: 12, background: AMBER, color: "#1a1200", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}
-              >
-                Enter
-              </button>
-              {loginError && <p style={{ color: SIGNAL, fontSize: 12, marginTop: 10 }}>Wrong code — try again.</p>}
-            </>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={{ minHeight: "100vh", background: SLATE, color: "#dfe6ee", fontFamily: "Inter, system-ui, sans-serif" }}>
-      <div style={{ borderBottom: `1px solid ${LINE}`, padding: "18px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+      <div style={{ borderBottom: `1px solid ${LINE}`, padding: "18px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div style={{ fontSize: 12, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI // MISSION CONTROL</div>
+          <div style={{ fontSize: 12, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>MISSION CONTROL</div>
           <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>Property Intelligence</div>
         </div>
-        <a href="/batch" style={{ padding: "8px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>Mass Upload / Batch pipeline →</a>
+        <button onClick={() => setAdvancedOpen((o) => !o)} style={{ padding: "6px 14px", background: advancedOpen ? AMBER : "transparent", color: advancedOpen ? "#1a1200" : AMBER, border: `1px solid ${AMBER}`, borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
+          ⚙ Advanced
+        </button>
       </div>
+
+      {advancedOpen && (
+        <div style={{ padding: "14px 20px", borderBottom: `1px solid ${LINE}`, background: "#0f1a28", display: "grid", gap: 14 }}>
+          <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER, marginBottom: 2 }}>ADVANCED CONTROLS</div>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+            {/* Image quality */}
+            <div style={{ minWidth: 200 }}>
+              <div style={{ fontSize: 11, color: MUTE, marginBottom: 4 }}>Image max dimension: <b style={{ color: "#dfe6ee" }}>{advancedSettings.imageMaxDim}px</b></div>
+              <input type="range" min={400} max={2400} step={200} value={advancedSettings.imageMaxDim}
+                onChange={(e) => setAdvancedSettings((s) => ({ ...s, imageMaxDim: +e.target.value }))}
+                style={{ width: "100%" }} />
+              <div style={{ fontSize: 10, color: MUTE }}>Higher = sharper images sent to AI, more tokens used</div>
+            </div>
+            <div style={{ minWidth: 200 }}>
+              <div style={{ fontSize: 11, color: MUTE, marginBottom: 4 }}>JPEG quality: <b style={{ color: "#dfe6ee" }}>{Math.round(advancedSettings.imageQuality * 100)}%</b></div>
+              <input type="range" min={0.5} max={1.0} step={0.05} value={advancedSettings.imageQuality}
+                onChange={(e) => setAdvancedSettings((s) => ({ ...s, imageQuality: +e.target.value }))}
+                style={{ width: "100%" }} />
+              <div style={{ fontSize: 10, color: MUTE }}>95–100% = near-lossless, best detail retention</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, color: "#dfe6ee", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={advancedSettings.forceMultiRun}
+                onChange={(e) => setAdvancedSettings((s) => ({ ...s, forceMultiRun: e.target.checked }))} />
+              <span>Force multi-run averaging</span>
+              <span style={{ fontSize: 10, color: MUTE }}>(always run 3× regardless of confidence — more tokens, more consistent scores)</span>
+            </label>
+            <label style={{ fontSize: 12, color: "#dfe6ee", display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={advancedSettings.skipVerification}
+                onChange={(e) => setAdvancedSettings((s) => ({ ...s, skipVerification: e.target.checked }))} />
+              <span>Skip verification pass</span>
+              <span style={{ fontSize: 10, color: MUTE }}>(faster scans, no second-opinion officer — score is analyst-only)</span>
+            </label>
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: 20, borderBottom: `1px solid ${LINE}` }}>
         <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER, marginBottom: 10 }}>SEARCH / ADD PROPERTY</div>
@@ -870,12 +952,39 @@ export default function PropertyIntelligenceConsole() {
               style={{ padding: "8px 10px", background: PANEL, border: `1px solid ${LINE}`, borderRadius: 6, color: "#dfe6ee", fontSize: 13 }} />
           ))}
         </div>
-        <div style={{ marginBottom: 10 }}>
+        <div style={{ marginBottom: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <button onClick={geocodeAddress} disabled={geocoding || !addrDraft.address} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: geocoding ? MUTE : BLUE, fontSize: 12, cursor: geocoding ? "default" : "pointer" }}>
-            {geocoding ? "Looking up…" : "Find coordinates from address"}
+            {geocoding ? "Looking up…" : /^\d{5}$/.test(addrDraft.address.trim()) ? "Search ZIP for addresses" : "Find coordinates from address"}
           </button>
-          {geocodeError && <span style={{ fontSize: 11, color: SIGNAL, marginLeft: 8 }}>{geocodeError}</span>}
+          {/* Voice input */}
+          <button onClick={voiceActive ? stopVoice : startVoice}
+            style={{ padding: "6px 12px", background: voiceActive ? SIGNAL : "transparent", border: `1px solid ${voiceActive ? SIGNAL : LINE}`, borderRadius: 6, color: voiceActive ? "#fff" : MUTE, fontSize: 12, cursor: "pointer" }}
+            title={voiceActive ? "Stop listening" : "Voice input"}>
+            {voiceActive ? "🎙 Listening…" : "🎙 Voice"}
+          </button>
+          <label style={{ fontSize: 11, color: MUTE, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+            <input type="checkbox" checked={handsFreeMode} onChange={(e) => setHandsFreeMode(e.target.checked)} />
+            Hands-free
+          </label>
+          {voiceTranscript && <span style={{ fontSize: 11, color: AMBER, fontStyle: "italic" }}>"{voiceTranscript}"</span>}
+          {geocodeError && <span style={{ fontSize: 11, color: SIGNAL }}>{geocodeError}</span>}
         </div>
+        {/* ZIP address suggestions */}
+        {(loadingSuggestions || zipSuggestions.length > 0) && (
+          <div style={{ marginBottom: 10, background: PANEL, border: `1px solid ${LINE}`, borderRadius: 8, overflow: "hidden" }}>
+            {loadingSuggestions && <div style={{ padding: "8px 12px", fontSize: 12, color: MUTE }}>Searching addresses in ZIP…</div>}
+            {zipSuggestions.map((s, i) => (
+              <button key={i} onClick={() => {
+                setAddrDraft((d) => ({ ...d, address: s.label.split(",")[0].trim(), lat: s.lat, lon: s.lon }));
+                setZipSuggestions([]);
+              }} style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "transparent", border: "none", borderTop: i > 0 ? `1px solid ${LINE}` : "none", color: "#dfe6ee", fontSize: 12, cursor: "pointer" }}
+                onMouseEnter={(e) => e.currentTarget.style.background = PANEL2}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button onClick={createProperty} disabled={creatingProperty || !addrDraft.address} style={{ padding: "8px 16px", background: creatingProperty ? MUTE : AMBER, color: "#1a1200", border: "none", borderRadius: 6, fontWeight: 700, cursor: creatingProperty ? "default" : "pointer" }}>
             {creatingProperty ? "Fetching imagery + permits…" : "Add Property"}
@@ -1045,6 +1154,32 @@ export default function PropertyIntelligenceConsole() {
                   {current.folders.images.length === 0 && <div style={{ fontSize: 12, color: MUTE }}>No images yet — agents will request them when you run a scan.</div>}
                 </div>
               </div>
+
+              {Object.keys(angleReview).length > 0 && (
+                <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER, marginBottom: 10 }}>MULTI-ANGLE REVIEW</div>
+                  <div style={{ display: "grid", gap: 14 }}>
+                    {Object.entries(angleReview).map(([domain, data]) => (
+                      <div key={domain}>
+                        <div style={{ fontSize: 11, color: MUTE, fontFamily: "monospace", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+                          <span>{DOMAIN_LABELS[domain] || domain}</span>
+                          <span style={{ color: data.score >= 75 ? SIGNAL : data.score >= 50 ? AMBER : data.score >= 25 ? BLUE : GREEN }}>
+                            Score {data.score} · {data.confidence} confidence{data.runs > 1 ? ` · ${data.runs} runs averaged` : ""}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+                          {data.images.map((im, i) => (
+                            <div key={i} style={{ flexShrink: 0, textAlign: "center" }}>
+                              <img src={im.dataUrl} alt={im.kind} style={{ width: 110, height: 82, objectFit: "cover", borderRadius: 6, border: `1px solid ${LINE}`, display: "block" }} />
+                              <div style={{ fontSize: 9, color: MUTE, marginTop: 3, fontFamily: "monospace" }}>{String(im.kind).replace(/_/g, " ")}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16 }}>
                 <div style={{ fontSize: 12, fontFamily: "monospace", color: AMBER, marginBottom: 10 }}>SUGGESTED ACTIONS</div>

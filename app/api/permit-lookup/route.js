@@ -19,37 +19,102 @@ function normalize(address) {
   return (address || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+// Shovels.ai — self-serve API key at app.shovels.ai, no sales call. Used
+// ONLY as a fallback when the address isn't already in your own directory,
+// so this cost is incurred once per address ever, not once per lookup.
+async function shovelsLookup(address) {
+  const key = process.env.PERMIT_API_KEY;
+  if (!key || (process.env.PERMIT_API_PROVIDER || "shovels").toLowerCase() !== "shovels") return null;
+
+  const headers = { "X-API-Key": key, accept: "application/json" };
+  const searchRes = await fetch(`https://api.shovels.ai/v2/addresses/search?q=${encodeURIComponent(address)}`, { headers });
+  if (!searchRes.ok) throw new Error(`Shovels address search HTTP ${searchRes.status}`);
+  const searchData = await searchRes.json();
+  const match = Array.isArray(searchData) ? searchData[0] : searchData?.items?.[0];
+  if (!match) return { records: [], source: "shovels" };
+
+  const geoId = match.geo_id || match.id || match.address_id;
+  if (!geoId) return { records: [], source: "shovels" };
+
+  const permitsRes = await fetch(`https://api.shovels.ai/v2/permits/search?geo_id=${encodeURIComponent(geoId)}&permit_tags=roofing`, { headers });
+  if (!permitsRes.ok) throw new Error(`Shovels permit search HTTP ${permitsRes.status}`);
+  const permitsData = await permitsRes.json();
+  const items = Array.isArray(permitsData) ? permitsData : permitsData?.items || [];
+  return {
+    records: items.map((p) => ({
+      issue_date: p.file_date || p.issue_date || null,
+      permit_type: p.permit_type || p.description || "permit",
+      permit_number: p.permit_number || p.id || null,
+      status: p.status || null,
+      roof_related: /roof/i.test(p.permit_type || p.description || ""),
+      source_url: p.jurisdiction_permit_url || null,
+    })),
+    source: "shovels",
+  };
+}
+
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const address = searchParams.get("address");
   const { url, key } = supabaseConfig();
 
   if (!address) return Response.json({ ok: false, notes: "No address provided." });
-  if (!url || !key) {
-    return Response.json({ ok: false, inDirectory: false, notes: "Permit directory not configured — set NEXT_PUBLIC_SUPABASE_URL and a Supabase key to enable it. Log this one manually for now." });
+
+  const tenYearsAgo = new Date();
+  tenYearsAgo.setFullYear(tenYearsAgo.getFullYear() - 10);
+
+  let rows = [];
+  let directoryConfigured = !!(url && key);
+
+  if (directoryConfigured) {
+    try {
+      const norm = normalize(address);
+      const endpoint = `${url.replace(/\/$/, "")}/rest/v1/permits?address_normalized=eq.${encodeURIComponent(norm)}&select=*&order=updated_at.desc&limit=5`;
+      const res = await fetch(endpoint, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+      if (!res.ok) throw new Error(`Supabase returned HTTP ${res.status}`);
+      rows = await res.json();
+    } catch (e) {
+      return Response.json({ ok: false, inDirectory: false, notes: "Directory lookup failed: " + e.message });
+    }
   }
 
-  try {
-    const norm = normalize(address);
-    const endpoint = `${url.replace(/\/$/, "")}/rest/v1/permits?address_normalized=eq.${encodeURIComponent(norm)}&select=*&order=updated_at.desc&limit=5`;
-    const res = await fetch(endpoint, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
-    if (!res.ok) throw new Error(`Supabase returned HTTP ${res.status}`);
-    const rows = await res.json();
-    // Business rule: any permit pulled in the last 10 years = low priority lead.
-    const tenYearsAgo = new Date();
-    tenYearsAgo.setFullYear(tenYearsAgo.getFullYear() - 10);
-    const recentPermit = rows.find((r) => r.issue_date && new Date(r.issue_date) >= tenYearsAgo);
-    return Response.json({
-      ok: true,
-      inDirectory: rows.length > 0,
-      records: rows,
-      lowPriority: !!recentPermit,
-      lowPriorityReason: recentPermit ? `Permit pulled ${recentPermit.issue_date} (within 10 years) — deprioritized.` : null,
-      notes: rows.length ? `Found ${rows.length} record(s) already in your directory.` : "Not in your directory yet — log it below and it'll be instant next time.",
-    });
-  } catch (e) {
-    return Response.json({ ok: false, inDirectory: false, notes: "Directory lookup failed: " + e.message });
+  if (rows.length === 0) {
+    // Not in your own directory (or directory isn't set up) — try the paid
+    // external fallback (Shovels.ai) if a key is configured. This is opt-in:
+    // with no PERMIT_API_KEY set, behavior is unchanged from before.
+    try {
+      const external = await shovelsLookup(address);
+      if (external?.records?.length) {
+        rows = external.records;
+        // Auto-save into the own directory so the next lookup for this
+        // address is free and instant, no repeat external API cost.
+        if (directoryConfigured) {
+          try {
+            const endpoint = `${url.replace(/\/$/, "")}/rest/v1/permits`;
+            await fetch(endpoint, {
+              method: "POST",
+              headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              body: JSON.stringify(rows.map((r) => ({ address, address_normalized: normalize(address), ...r, source: "shovels" }))),
+            });
+          } catch { /* best-effort cache — a save failure shouldn't block the response */ }
+        }
+      }
+    } catch { /* external lookup is a bonus, not a requirement — fall through */ }
   }
+
+  const recentPermit = rows.find((r) => r.issue_date && new Date(r.issue_date) >= tenYearsAgo);
+  return Response.json({
+    ok: true,
+    inDirectory: rows.length > 0,
+    records: rows,
+    lowPriority: !!recentPermit,
+    lowPriorityReason: recentPermit ? `Permit pulled ${recentPermit.issue_date} (within 10 years) — deprioritized.` : null,
+    notes: rows.length
+      ? `Found ${rows.length} record(s).`
+      : directoryConfigured
+        ? "Not in your directory yet — log it below and it'll be instant next time."
+        : "Permit directory not configured — set NEXT_PUBLIC_SUPABASE_URL and a Supabase key to enable it. Log this one manually for now.",
+  });
 }
 
 export async function POST(req) {

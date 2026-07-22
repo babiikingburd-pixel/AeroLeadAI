@@ -1,0 +1,22 @@
+# Env / secrets — NEVER commit these (see 04-SECURITY-NOTES.md)
+.env
+.env.local
+.env*.local
+
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Replit internals — never belongs in the repo or shared zips
+.local/
+.config/
+.cache/
+.upm/
+
+# Misc
+.DS_Store
+*.log
+zipFile.zip
