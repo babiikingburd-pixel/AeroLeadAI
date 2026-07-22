@@ -16,6 +16,23 @@ const TEN_YEARS_MS = 10 * 365.25 * 24 * 3600 * 1000;
 const DOMAINS = ["roof", "tree", "driveway"];
 const DOMAIN_LABELS = { roof: "Roof", tree: "Tree", driveway: "Driveway" };
 
+const SALES_STATUSES = ["new", "contacted", "estimate_scheduled", "won", "lost"];
+const SALES_STATUS_LABELS = { new: "New", contacted: "Contacted", estimate_scheduled: "Estimate Scheduled", won: "Won", lost: "Lost" };
+const SALES_STATUS_COLORS = { new: MUTE, contacted: BLUE, estimate_scheduled: AMBER, won: GREEN, lost: SIGNAL };
+
+// Best-effort extraction for search/filtering — addresses come from ZIP scan
+// (which already knows city/state precisely) or free-typed/CSV text, where
+// this is a reasonable guess, not authoritative.
+function parseAddressParts(address) {
+  const zipMatch = address.match(/\b(\d{5})(?:-\d{4})?\b(?!.*\d{5})/);
+  const zip = zipMatch ? zipMatch[1] : "";
+  const segments = address.split(",").map((s) => s.trim()).filter(Boolean);
+  const city = segments.length >= 2 ? segments[segments.length - 2] : "";
+  const stateMatch = address.match(/\b([A-Z]{2})\b\s*\d{5}/);
+  const state = stateMatch ? stateMatch[1] : "";
+  return { city, state, zip };
+}
+
 // Queue durability: if Supabase is configured, the queue (addresses, scores,
 // permit status — NOT images, which stay client-side) syncs there instead of
 // living only in this browser's localStorage. See supabase_batch_leads_schema.sql.
@@ -43,16 +60,25 @@ function tierOf(item) {
 const TIER_COLORS = { hot: SIGNAL, warm: AMBER, cool: BLUE, cold: MUTE, "low-priority": "#8a6bd1", unscored: MUTE };
 
 function blankItem(address, extra = {}) {
+  const parsed = parseAddressParts(address);
   return {
     id: uid(),
     address,
     lat: null,
     lon: null,
     images: { roof: null, tree: null, driveway: null },
+    imageryMeta: null, // { provider, cached, cachedAt, resolution, capturedDate }
     scores: { roof: null, tree: null, driveway: null },
     permitWithin10y: false,
     permitNotes: "Not checked",
     stage: "queued",
+    salesStatus: "new",
+    owner: "",
+    notes: "",
+    tags: [],
+    city: parsed.city,
+    state: parsed.state,
+    zip: parsed.zip,
     log: [],
     ...extra,
   };
@@ -75,6 +101,13 @@ function itemToRow(item) {
     },
     permit_within_10y: item.permitWithin10y,
     permit_notes: item.permitNotes,
+    sales_status: item.salesStatus || "new",
+    owner: item.owner || null,
+    notes: item.notes || null,
+    tags: item.tags && item.tags.length ? item.tags : [],
+    city: item.city || null,
+    state: item.state || null,
+    zip: item.zip || null,
     updated_at: nowIso(),
   };
 }
@@ -86,6 +119,7 @@ function rowToItem(row) {
     lat: row.lat ?? null,
     lon: row.lon ?? null,
     images: { roof: null, tree: null, driveway: null }, // images aren't persisted server-side; pipeline re-fetches on demand
+    imageryMeta: null,
     scores: {
       roof: row.roof_score !== null ? { score: row.roof_score, notes: row.damage_notes?.roof || "", provider: null } : null,
       tree: row.tree_score !== null ? { score: row.tree_score, notes: row.damage_notes?.tree || "", provider: null } : null,
@@ -94,6 +128,13 @@ function rowToItem(row) {
     permitWithin10y: !!row.permit_within_10y,
     permitNotes: row.permit_notes || "Not checked",
     stage: row.stage || "done",
+    salesStatus: row.sales_status || "new",
+    owner: row.owner || "",
+    notes: row.notes || "",
+    tags: row.tags || [],
+    city: row.city || "",
+    state: row.state || "",
+    zip: row.zip || "",
     log: ["Loaded from Supabase directory"],
   };
 }
@@ -105,6 +146,9 @@ export default function MassUploadConsole() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [editor, setEditor] = useState(null); // { itemId, domain }
+  const [historyFor, setHistoryFor] = useState(null); // itemId
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const fileRef = useRef(null);
 
   // ---- persistence: Supabase (durable, cross-device) if configured, else localStorage ----
@@ -251,6 +295,7 @@ export default function MassUploadConsole() {
       data.addresses.forEach((a) => {
         upsert(blankItem(a.address, {
           lat: a.lat || null, lon: a.lon || null,
+          city: data.city || "", state: data.state || "", zip: data.zip || "",
           log: [`Imported from ZIP ${data.zip} scan`],
         }));
       });
@@ -292,17 +337,17 @@ export default function MassUploadConsole() {
     } catch { return { ...item, log: [...item.log, "Geocode failed"] }; }
   }
 
-  async function fetchImagery(item) {
-    const needsAny = DOMAINS.some((d) => !item.images[d]);
+  async function fetchImagery(item, force = false) {
+    const needsAny = force || DOMAINS.some((d) => !item.images[d]);
     if (!needsAny || !item.lat || !item.lon) return item;
     try {
-      const res = await fetch("/api/imagery-agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat: item.lat, lon: item.lon }) });
+      const res = await fetch("/api/imagery-agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat: item.lat, lon: item.lon, force }) });
       const data = await res.json();
       if (data.error) return { ...item, log: [...item.log, data.notes || data.error] };
 
       const angles = data.angles || {};
       const roofline = Object.entries(angles).filter(([k]) => k.includes("roofline")).map(([, v]) => v);
-      const images = { ...item.images };
+      const images = force ? { roof: null, tree: null, driveway: null } : { ...item.images };
 
       // One imagery-agent call returns several distinct vantage points — assign
       // the tight parcel crop + roofline street shots to roof, the hybrid
@@ -327,8 +372,14 @@ export default function MassUploadConsole() {
       }
 
       const gotCount = DOMAINS.filter((d) => images[d]).length;
-      return { ...item, images, log: [...item.log, `Imagery auto-fetched (${data.provider}) — ${gotCount}/3 domain image(s) ready`] };
+      const imageryMeta = { provider: data.provider, cached: !!data.cached, cachedAt: data.cachedAt || null, resolution: data.resolution || {}, capturedDate: data.capturedDate || null, fetchedAt: nowIso() };
+      return { ...item, images, imageryMeta, log: [...item.log, `Imagery ${data.cached ? "loaded from cache" : "auto-fetched"} (${data.provider}) — ${gotCount}/3 domain image(s) ready`] };
     } catch { return { ...item, log: [...item.log, "Imagery fetch failed"] }; }
+  }
+
+  async function refreshImagery(it) {
+    const updated = await fetchImagery(it, true);
+    upsert({ ...updated, scores: { roof: null, tree: null, driveway: null }, stage: "queued", log: [...updated.log, "Imagery force-refreshed — re-run pipeline to rescore"] });
   }
 
   async function checkPermits(item) {
@@ -458,14 +509,22 @@ export default function MassUploadConsole() {
     if (supabase) supabase.from("batch_leads").delete().eq("id", id).then(() => {}).catch(() => {});
   }
 
+  function exportRows() {
+    return order.map((id) => items[id]).filter(Boolean).map((it) => ({
+      tier: tierOf(it), status: SALES_STATUS_LABELS[it.salesStatus] || it.salesStatus,
+      address: it.address, owner: it.owner || "", city: it.city || "", state: it.state || "", zip: it.zip || "",
+      lat: it.lat || "", lon: it.lon || "",
+      roof_score: it.scores.roof?.score ?? "", tree_score: it.scores.tree?.score ?? "", driveway_score: it.scores.driveway?.score ?? "",
+      permit_within_10y: it.permitWithin10y, permit_notes: it.permitNotes,
+      tags: (it.tags || []).join("; "), notes: it.notes || "",
+    }));
+  }
+
   function exportCsv() {
-    const header = ["tier", "address", "lat", "lon", "roof_score", "tree_score", "driveway_score", "permit_within_10y", "permit_notes"];
-    const rows = order.map((id) => items[id]).filter(Boolean).map((it) => [
-      tierOf(it), it.address, it.lat || "", it.lon || "",
-      it.scores.roof?.score ?? "", it.scores.tree?.score ?? "", it.scores.driveway?.score ?? "",
-      it.permitWithin10y, it.permitNotes,
-    ]);
-    const csv = [header.join(",")].concat(rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))).join("\n");
+    const rows = exportRows();
+    if (!rows.length) return;
+    const header = Object.keys(rows[0]);
+    const csv = [header.join(",")].concat(rows.map((r) => header.map((h) => `"${String(r[h] ?? "").replace(/"/g, '""')}"`).join(","))).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -473,9 +532,32 @@ export default function MassUploadConsole() {
     URL.revokeObjectURL(url);
   }
 
-  // ---- sorted view: hot first, low-priority last ----
+  async function exportExcel() {
+    const rows = exportRows();
+    if (!rows.length) return;
+    const XLSX = await import("xlsx"); // lazy-loaded — keeps the initial page bundle lean since most sessions never export
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Leads");
+    XLSX.writeFile(wb, "aeroleadai_batch.xlsx");
+  }
+
+  function updateLead(it, patch) {
+    upsert({ ...it, ...patch });
+  }
+
+  // ---- sorted + filtered view: hot first, low-priority last ----
   const tierRank = { hot: 0, warm: 1, cool: 2, cold: 3, unscored: 4, "low-priority": 5 };
-  const sorted = order.map((id) => items[id]).filter(Boolean).sort((a, b) => tierRank[tierOf(a)] - tierRank[tierOf(b)]);
+  const searchLower = search.trim().toLowerCase();
+  const sorted = order
+    .map((id) => items[id])
+    .filter(Boolean)
+    .filter((it) => statusFilter === "all" || (it.salesStatus || "new") === statusFilter)
+    .filter((it) => {
+      if (!searchLower) return true;
+      return [it.address, it.owner, it.city, it.state, it.zip].some((f) => (f || "").toLowerCase().includes(searchLower));
+    })
+    .sort((a, b) => tierRank[tierOf(a)] - tierRank[tierOf(b)]);
 
   function updateDomainImage(itemId, domain, dataUrl) {
     const it = items[itemId];
@@ -509,6 +591,7 @@ export default function MassUploadConsole() {
           <button onClick={() => csvRef.current?.click()} style={btnSecondary}>Import CSV</button>
           <input ref={csvRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e) => { handleCsv(e.target.files[0]); e.target.value = ""; }} />
           <button onClick={exportCsv} style={btnSecondary}>Export CSV</button>
+          <button onClick={exportExcel} style={btnSecondary}>Export Excel</button>
           <button onClick={runAll} disabled={running || !order.length} style={{ ...btnPrimary, opacity: running || !order.length ? 0.5 : 1 }}>
             {running ? "Running…" : `Run pipeline (${order.filter((id) => items[id]?.stage !== "done").length})`}
           </button>
@@ -569,58 +652,39 @@ export default function MassUploadConsole() {
         </div>
       </div>
 
-      {!sorted.length && <div style={{ color: MUTE, textAlign: "center", padding: 40 }}>Nothing queued yet.</div>}
+      {order.length > 0 && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by address, owner, city, or ZIP…"
+            style={{ flex: "1 1 260px", background: PANEL2, border: `1px solid ${LINE}`, color: TEXT, borderRadius: 6, padding: "8px 10px", fontSize: 13 }}
+          />
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ background: PANEL2, border: `1px solid ${LINE}`, color: TEXT, borderRadius: 6, padding: "8px 10px", fontSize: 13 }}>
+            <option value="all">All statuses</option>
+            {SALES_STATUSES.map((s) => <option key={s} value={s}>{SALES_STATUS_LABELS[s]}</option>)}
+          </select>
+          <span style={{ fontSize: 12, color: MUTE }}>{sorted.length} of {order.length} lead(s)</span>
+        </div>
+      )}
+
+      {!sorted.length && <div style={{ color: MUTE, textAlign: "center", padding: 40 }}>{order.length ? "No leads match your search/filter." : "Nothing queued yet."}</div>}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-        {sorted.map((it) => {
-          const tier = tierOf(it);
-          return (
-            <div key={it.id} style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, overflow: "hidden" }}>
-              <div style={{ position: "relative" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: LINE }}>
-                  {DOMAINS.map((domain) => {
-                    const img = it.images[domain];
-                    const score = it.scores[domain]?.score;
-                    return (
-                      <div key={domain} style={{ position: "relative", height: 96, background: PANEL2 }}>
-                        {img
-                          ? <img src={img.dataUrl} alt={domain} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 10, textAlign: "center", padding: 4 }}>{it.stage === "done" ? "No image" : "Awaiting"}</div>}
-                        <span style={{ position: "absolute", top: 4, left: 4, padding: "2px 6px", borderRadius: 10, fontSize: 9, fontWeight: 700, background: "rgba(13,20,32,.85)", color: TEXT }}>{DOMAIN_LABELS[domain]}</span>
-                        {score !== null && score !== undefined && (
-                          <span style={{ position: "absolute", top: 4, right: 4, padding: "2px 6px", borderRadius: 10, fontSize: 9, fontWeight: 700, background: "rgba(13,20,32,.85)", color: score >= 75 ? SIGNAL : score >= 50 ? AMBER : score >= 25 ? BLUE : MUTE }}>{score}</span>
-                        )}
-                        {img && (
-                          <button onClick={() => setEditor({ itemId: it.id, domain })} style={{ position: "absolute", bottom: 4, right: 4, padding: "2px 6px", background: "rgba(13,20,32,.85)", border: `1px solid ${LINE}`, borderRadius: 5, color: BLUE, fontSize: 9.5, cursor: "pointer" }}>
-                            Edit
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-                <span style={{ position: "absolute", top: 8, left: 8, padding: "3px 9px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", background: "rgba(13,20,32,.85)", color: TIER_COLORS[tier] }}>{tier}</span>
-                <button onClick={() => removeItem(it.id)} style={{ position: "absolute", top: 6, right: 6, background: "rgba(13,20,32,.8)", border: "none", color: TEXT, width: 22, height: 22, borderRadius: "50%", cursor: "pointer", fontSize: 13, lineHeight: 1 }}>×</button>
-              </div>
-              <div style={{ padding: "10px 12px" }}>
-                <input
-                  value={it.address}
-                  onChange={(e) => upsert({ ...it, address: e.target.value })}
-                  style={{ width: "100%", background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 13, fontWeight: 600, padding: "2px 0", marginBottom: 6, boxSizing: "border-box" }}
-                />
-                <div style={{ fontSize: 11.5, color: MUTE, lineHeight: 1.5 }}>
-                  <div title={it.permitNotes}>Permit: {it.permitWithin10y ? <b style={{ color: "#8a6bd1" }}>within 10y → low priority</b> : it.permitNotes}</div>
-                  <div style={{ fontFamily: "monospace", fontSize: 10.5 }}>{it.lat && it.lon ? `${Number(it.lat).toFixed(4)}, ${Number(it.lon).toFixed(4)}` : "no coords"} · {it.stage}</div>
-                </div>
-                {it.stage === "done" && !it.permitWithin10y && (
-                  <button onClick={() => promoteToDeepDive(it)} style={{ ...btnSecondary, width: "100%", marginTop: 8, padding: "6px 0", fontSize: 12, color: GREEN, borderColor: GREEN }}>
-                    Promote to deep-dive →
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
+        {sorted.map((it) => (
+          <LeadCard
+            key={it.id}
+            it={it}
+            tier={tierOf(it)}
+            onUpdate={(patch) => updateLead(it, patch)}
+            onRemove={() => removeItem(it.id)}
+            onPromote={() => promoteToDeepDive(it)}
+            onEdit={(domain) => setEditor({ itemId: it.id, domain })}
+            onRefreshImagery={() => refreshImagery(it)}
+            onShowHistory={() => setHistoryFor(it.id)}
+            supabaseConfigured={!!supabase}
+          />
+        ))}
       </div>
 
       {editor && items[editor.itemId]?.images[editor.domain] && (
@@ -631,6 +695,176 @@ export default function MassUploadConsole() {
           onSave={(newDataUrl) => { updateDomainImage(editor.itemId, editor.domain, newDataUrl); setEditor(null); }}
         />
       )}
+
+      {historyFor && items[historyFor] && (
+        <ImageryHistoryModal item={items[historyFor]} onClose={() => setHistoryFor(null)} />
+      )}
+    </div>
+  );
+}
+
+function LeadCard({ it, tier, onUpdate, onRemove, onPromote, onEdit, onRefreshImagery, onShowHistory, supabaseConfigured }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [tagInput, setTagInput] = useState("");
+
+  function addTag() {
+    const t = tagInput.trim();
+    if (!t) return;
+    if (!(it.tags || []).includes(t)) onUpdate({ tags: [...(it.tags || []), t] });
+    setTagInput("");
+  }
+  function removeTag(t) {
+    onUpdate({ tags: (it.tags || []).filter((x) => x !== t) });
+  }
+
+  return (
+    <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ position: "relative" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: LINE }}>
+          {DOMAINS.map((domain) => {
+            const img = it.images[domain];
+            const score = it.scores[domain]?.score;
+            const res = it.imageryMeta?.resolution?.[domain === "roof" ? "overview_tight" : domain === "driveway" ? "overview_hybrid_labeled" : "overview_context"] || it.imageryMeta?.resolution?.overview_tight;
+            const title = img ? [
+              it.imageryMeta?.provider ? `Provider: ${it.imageryMeta.provider}` : null,
+              res?.metersPerPixel ? `Resolution: ~${res.metersPerPixel.toFixed(3)} m/px` : null,
+              it.imageryMeta?.cached ? `Cached (fetched ${new Date(it.imageryMeta.cachedAt).toLocaleDateString()})` : "Freshly fetched",
+              "Capture date not exposed by this provider's static tile API",
+            ].filter(Boolean).join(" · ") : "";
+            return (
+              <div key={domain} style={{ position: "relative", height: 96, background: PANEL2 }} title={title}>
+                {img
+                  ? <img src={img.dataUrl} alt={domain} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 10, textAlign: "center", padding: 4 }}>{it.stage === "done" ? "No image" : "Awaiting"}</div>}
+                <span style={{ position: "absolute", top: 4, left: 4, padding: "2px 6px", borderRadius: 10, fontSize: 9, fontWeight: 700, background: "rgba(13,20,32,.85)", color: TEXT }}>{DOMAIN_LABELS[domain]}</span>
+                {score !== null && score !== undefined && (
+                  <span style={{ position: "absolute", top: 4, right: 4, padding: "2px 6px", borderRadius: 10, fontSize: 9, fontWeight: 700, background: "rgba(13,20,32,.85)", color: score >= 75 ? SIGNAL : score >= 50 ? AMBER : score >= 25 ? BLUE : MUTE }}>{score}</span>
+                )}
+                {img && (
+                  <button onClick={() => onEdit(domain)} style={{ position: "absolute", bottom: 4, right: 4, padding: "2px 6px", background: "rgba(13,20,32,.85)", border: `1px solid ${LINE}`, borderRadius: 5, color: BLUE, fontSize: 9.5, cursor: "pointer" }}>
+                    Edit
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <span style={{ position: "absolute", top: 8, left: 8, padding: "3px 9px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", background: "rgba(13,20,32,.85)", color: TIER_COLORS[tier] }}>{tier}</span>
+        <button onClick={onRemove} style={{ position: "absolute", top: 6, right: 6, background: "rgba(13,20,32,.8)", border: "none", color: TEXT, width: 22, height: 22, borderRadius: "50%", cursor: "pointer", fontSize: 13, lineHeight: 1 }}>×</button>
+        {it.imageryMeta?.cached && (
+          <span style={{ position: "absolute", bottom: 4, left: 4, padding: "2px 7px", borderRadius: 10, fontSize: 9, background: "rgba(13,20,32,.85)", color: GREEN }}>cached</span>
+        )}
+      </div>
+      <div style={{ padding: "10px 12px" }}>
+        <input
+          value={it.address}
+          onChange={(e) => onUpdate({ address: e.target.value })}
+          style={{ width: "100%", background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 13, fontWeight: 600, padding: "2px 0", marginBottom: 6, boxSizing: "border-box" }}
+        />
+        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+          <select
+            value={it.salesStatus || "new"}
+            onChange={(e) => onUpdate({ salesStatus: e.target.value })}
+            style={{ flex: 1, background: PANEL2, border: `1px solid ${SALES_STATUS_COLORS[it.salesStatus] || LINE}`, color: SALES_STATUS_COLORS[it.salesStatus] || TEXT, borderRadius: 6, padding: "4px 6px", fontSize: 11, fontWeight: 700 }}
+          >
+            {SALES_STATUSES.map((s) => <option key={s} value={s}>{SALES_STATUS_LABELS[s]}</option>)}
+          </select>
+          <button onClick={() => setDetailsOpen((v) => !v)} style={{ ...btnSecondary, padding: "4px 8px", fontSize: 11 }}>{detailsOpen ? "Hide" : "Notes/Tags"}</button>
+        </div>
+        {detailsOpen && (
+          <div style={{ marginBottom: 8, padding: 8, background: PANEL2, borderRadius: 6, border: `1px solid ${LINE}` }}>
+            <input
+              value={it.owner || ""}
+              onChange={(e) => onUpdate({ owner: e.target.value })}
+              placeholder="Owner name (optional)"
+              style={{ width: "100%", background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 11.5, padding: "3px 0", marginBottom: 6, boxSizing: "border-box" }}
+            />
+            <textarea
+              value={it.notes || ""}
+              onChange={(e) => onUpdate({ notes: e.target.value })}
+              placeholder="Notes…"
+              rows={2}
+              style={{ width: "100%", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 4, color: TEXT, fontSize: 11.5, padding: 5, marginBottom: 6, boxSizing: "border-box", resize: "vertical" }}
+            />
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+              {(it.tags || []).map((t) => (
+                <span key={t} onClick={() => removeTag(t)} title="Click to remove" style={{ cursor: "pointer", fontSize: 10, padding: "2px 7px", borderRadius: 10, background: PANEL, border: `1px solid ${LINE}`, color: TEXT }}>{t} ×</span>
+              ))}
+            </div>
+            <input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
+              placeholder="Add tag, press Enter"
+              style={{ width: "100%", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 4, color: TEXT, fontSize: 11, padding: "4px 6px", boxSizing: "border-box" }}
+            />
+          </div>
+        )}
+        <div style={{ fontSize: 11.5, color: MUTE, lineHeight: 1.5 }}>
+          <div title={it.permitNotes}>Permit: {it.permitWithin10y ? <b style={{ color: "#8a6bd1" }}>within 10y → low priority</b> : it.permitNotes}</div>
+          <div style={{ fontFamily: "monospace", fontSize: 10.5 }}>{it.lat && it.lon ? `${Number(it.lat).toFixed(4)}, ${Number(it.lon).toFixed(4)}` : "no coords"} · {it.stage}{it.zip ? ` · ${it.zip}` : ""}</div>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          <button onClick={onRefreshImagery} disabled={!it.lat || !it.lon} style={{ ...btnSecondary, flex: 1, padding: "6px 0", fontSize: 11.5, opacity: it.lat && it.lon ? 1 : 0.5 }}>↻ Refresh imagery</button>
+          <button onClick={onShowHistory} disabled={!supabaseConfigured} title={supabaseConfigured ? "Compare imagery over time" : "Requires Supabase for imagery history"} style={{ ...btnSecondary, flex: 1, padding: "6px 0", fontSize: 11.5, opacity: supabaseConfigured ? 1 : 0.5 }}>🕐 History</button>
+        </div>
+        {it.stage === "done" && !it.permitWithin10y && (
+          <button onClick={onPromote} style={{ ...btnSecondary, width: "100%", marginTop: 8, padding: "6px 0", fontSize: 12, color: GREEN, borderColor: GREEN }}>
+            Promote to deep-dive →
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Before/after imagery comparison, sourced from imagery_history (Supabase) ----
+function ImageryHistoryModal({ item, onClose }) {
+  const [snapshots, setSnapshots] = useState(null); // null = loading
+  const [leftIdx, setLeftIdx] = useState(0);
+  const [rightIdx, setRightIdx] = useState(1);
+
+  useEffect(() => {
+    if (!item.lat || !item.lon) { setSnapshots([]); return; }
+    fetch(`/api/imagery-agent?lat=${item.lat}&lon=${item.lon}`)
+      .then((r) => r.json())
+      .then((data) => setSnapshots(data.ok ? data.snapshots : []))
+      .catch(() => setSnapshots([]));
+  }, [item.lat, item.lon]);
+
+  const picFor = (snap) => snap?.angles?.overview_tight || snap?.angles?.overview_context || null;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,14,.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={onClose}>
+      <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18, width: 820, maxWidth: "94vw" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+          <b style={{ fontSize: 14 }}>Imagery History — {item.address}</b>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: MUTE, cursor: "pointer", fontSize: 16 }}>×</button>
+        </div>
+        {snapshots === null && <div style={{ color: MUTE, fontSize: 13, padding: 20, textAlign: "center" }}>Loading history…</div>}
+        {snapshots && snapshots.length < 2 && (
+          <div style={{ color: MUTE, fontSize: 13, padding: 20, textAlign: "center" }}>
+            Not enough history yet for this property ({snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} on file). Snapshots accumulate each time imagery is freshly fetched (cache misses or "↻ Refresh imagery"), roughly every 30 days per property.
+          </div>
+        )}
+        {snapshots && snapshots.length >= 2 && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {[{ idx: leftIdx, set: setLeftIdx }, { idx: rightIdx, set: setRightIdx }].map((col, i) => (
+                <div key={i}>
+                  <select value={col.idx} onChange={(e) => col.set(Number(e.target.value))} style={{ width: "100%", background: PANEL2, border: `1px solid ${LINE}`, color: TEXT, borderRadius: 6, padding: "6px 8px", fontSize: 12, marginBottom: 6 }}>
+                    {snapshots.map((s, si) => <option key={si} value={si}>{new Date(s.fetched_at).toLocaleString()} ({s.provider})</option>)}
+                  </select>
+                  {picFor(snapshots[col.idx])
+                    ? <img src={picFor(snapshots[col.idx])} alt="" style={{ width: "100%", borderRadius: 8, background: "#000" }} />
+                    : <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: MUTE, fontSize: 12, background: PANEL2, borderRadius: 8 }}>No image in this snapshot</div>}
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: 11, color: MUTE, marginTop: 10, marginBottom: 0 }}>Comparing the tight parcel crop from each snapshot. Capture-date metadata isn't exposed by these providers' static-tile APIs — dates shown are when AeroLeadAI fetched the image, not when the underlying satellite pass occurred.</p>
+          </>
+        )}
+      </div>
     </div>
   );
 }
