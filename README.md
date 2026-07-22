@@ -80,6 +80,16 @@ analysis, so it'll hit that limit faster than a single-call setup would.
 4. Redeploy. The app detects these automatically and switches from
    password+localStorage to magic-link+Supabase — no code changes needed.
 
+### Batch console ZIP-scan queue (optional — separate from the above)
+
+The `/batch` Mass Upload console's ZIP-code-search queue defaults to
+localStorage (single browser only). To make it durable across
+devices/sessions, run `supabase_batch_leads_schema.sql` in the same
+Supabase project's SQL editor, then set the same
+`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` vars above.
+Images stay client-side either way (re-fetched free on demand) — only the
+address/score/permit record is stored server-side.
+
 ## Deploy steps (Vercel, ~10 minutes)
 
 1. Get an Anthropic API key at console.anthropic.com if you don't have one.

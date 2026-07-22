@@ -64,13 +64,16 @@ export async function POST(req) {
       const d = 0.0008; // ~tight parcel view
       const dCtx = 0.003; // context view
       const esri = (delta) => `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - delta},${lat - delta},${lon + delta},${lat + delta}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&f=image`;
-      const tight = await fetchAsDataUrl(esri(d), 1);
+      // 2 retries (3 attempts total) — under concurrent batch load the free
+      // Esri tier drops the occasional request; a single retry wasn't enough
+      // to keep the tight crop as reliable as the context shot.
+      const tight = await fetchAsDataUrl(esri(d), 2);
       if (tight) {
         result.angles.overview_tight = tight;
         result.dataUrl = tight;
         result.provider = "esri-free";
       }
-      const ctx = await fetchAsDataUrl(esri(dCtx), 1);
+      const ctx = await fetchAsDataUrl(esri(dCtx), 2);
       if (ctx) result.angles.overview_context = ctx;
       if (!tight && !ctx) {
         return Response.json({ error: "Keyless imagery fetch failed", notes: "Esri free tier unreachable. Add GOOGLE_MAPS_API_KEY or MAPBOX_TOKEN for reliable imagery." }, { status: 200 });

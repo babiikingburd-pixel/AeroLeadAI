@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // ---- palette matched to PropertyIntelligenceConsole ----
 const SLATE = "#0d1420", PANEL = "#131c2b", PANEL2 = "#0f1725", LINE = "#22304a";
@@ -12,12 +13,27 @@ const STORE_KEY = "aerolead:batch:v1";
 
 const TEN_YEARS_MS = 10 * 365.25 * 24 * 3600 * 1000;
 
+const DOMAINS = ["roof", "tree", "driveway"];
+const DOMAIN_LABELS = { roof: "Roof", tree: "Tree", driveway: "Driveway" };
+
+// Queue durability: if Supabase is configured, the queue (addresses, scores,
+// permit status — NOT images, which stay client-side) syncs there instead of
+// living only in this browser's localStorage. See supabase_batch_leads_schema.sql.
+const SUPABASE_URL = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_URL : null;
+const SUPABASE_ANON_KEY = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY : null;
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+
+function combinedScore(item) {
+  const scores = DOMAINS.map((d) => item.scores?.[d]?.score).filter((s) => s !== null && s !== undefined);
+  return scores.length ? Math.max(...scores) : null;
+}
+
 function tierOf(item) {
   // Business rule (stated): any property with a permit pulled in the last ten
   // years is low priority — this overrides the damage score entirely.
   if (item.permitWithin10y) return "low-priority";
-  const s = item.damageScore;
-  if (s === null || s === undefined) return "unscored";
+  const s = combinedScore(item);
+  if (s === null) return "unscored";
   if (s >= 75) return "hot";
   if (s >= 50) return "warm";
   if (s >= 25) return "cool";
@@ -26,29 +42,103 @@ function tierOf(item) {
 
 const TIER_COLORS = { hot: SIGNAL, warm: AMBER, cool: BLUE, cold: MUTE, "low-priority": "#8a6bd1", unscored: MUTE };
 
+function blankItem(address, extra = {}) {
+  return {
+    id: uid(),
+    address,
+    lat: null,
+    lon: null,
+    images: { roof: null, tree: null, driveway: null },
+    scores: { roof: null, tree: null, driveway: null },
+    permitWithin10y: false,
+    permitNotes: "Not checked",
+    stage: "queued",
+    log: [],
+    ...extra,
+  };
+}
+
+function itemToRow(item) {
+  return {
+    id: item.id,
+    address: item.address,
+    lat: item.lat ? Number(item.lat) : null,
+    lon: item.lon ? Number(item.lon) : null,
+    stage: item.stage,
+    roof_score: item.scores.roof?.score ?? null,
+    tree_score: item.scores.tree?.score ?? null,
+    driveway_score: item.scores.driveway?.score ?? null,
+    damage_notes: {
+      roof: item.scores.roof?.notes ?? null,
+      tree: item.scores.tree?.notes ?? null,
+      driveway: item.scores.driveway?.notes ?? null,
+    },
+    permit_within_10y: item.permitWithin10y,
+    permit_notes: item.permitNotes,
+    updated_at: nowIso(),
+  };
+}
+
+function rowToItem(row) {
+  return {
+    id: row.id,
+    address: row.address,
+    lat: row.lat ?? null,
+    lon: row.lon ?? null,
+    images: { roof: null, tree: null, driveway: null }, // images aren't persisted server-side; pipeline re-fetches on demand
+    scores: {
+      roof: row.roof_score !== null ? { score: row.roof_score, notes: row.damage_notes?.roof || "", provider: null } : null,
+      tree: row.tree_score !== null ? { score: row.tree_score, notes: row.damage_notes?.tree || "", provider: null } : null,
+      driveway: row.driveway_score !== null ? { score: row.driveway_score, notes: row.damage_notes?.driveway || "", provider: null } : null,
+    },
+    permitWithin10y: !!row.permit_within_10y,
+    permitNotes: row.permit_notes || "Not checked",
+    stage: row.stage || "done",
+    log: ["Loaded from Supabase directory"],
+  };
+}
+
 export default function MassUploadConsole() {
   const [items, setItems] = useState({});
   const [order, setOrder] = useState([]);
   const [addressText, setAddressText] = useState("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
-  const [editorId, setEditorId] = useState(null);
+  const [editor, setEditor] = useState(null); // { itemId, domain }
   const fileRef = useRef(null);
 
-  // ---- persistence ----
+  // ---- persistence: Supabase (durable, cross-device) if configured, else localStorage ----
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw);
-        setItems(saved.items || {});
-        setOrder(saved.order || []);
+    (async () => {
+      if (supabase) {
+        try {
+          const { data, error } = await supabase.from("batch_leads").select("*").order("updated_at", { ascending: false }).limit(500);
+          if (!error && data) {
+            const nextItems = {}, nextOrder = [];
+            data.forEach((row) => {
+              const it = rowToItem(row);
+              nextItems[it.id] = it;
+              nextOrder.push(it.id);
+            });
+            setItems(nextItems);
+            setOrder(nextOrder.reverse());
+            return;
+          }
+        } catch {}
       }
-    } catch {}
+      try {
+        const raw = localStorage.getItem(STORE_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          setItems(saved.items || {});
+          setOrder(saved.order || []);
+        }
+      } catch {}
+    })();
   }, []);
 
   // Safe write: if images push us over the ~5MB quota, retry storing metadata
-  // only (drop dataUrls) so scores/addresses always persist even for big batches.
+  // only (drop images) so scores/addresses always persist even for big batches.
   function safeStore(nextItems, nextOrder) {
     const payload = { items: nextItems, order: nextOrder };
     try {
@@ -56,10 +146,15 @@ export default function MassUploadConsole() {
     } catch {
       try {
         const stripped = {};
-        for (const k in nextItems) stripped[k] = { ...nextItems[k], dataUrl: null };
+        for (const k in nextItems) stripped[k] = { ...nextItems[k], images: { roof: null, tree: null, driveway: null } };
         localStorage.setItem(STORE_KEY, JSON.stringify({ items: stripped, order: nextOrder }));
       } catch {}
     }
+  }
+
+  function syncToSupabase(item) {
+    if (!supabase) return;
+    supabase.from("batch_leads").upsert(itemToRow(item)).then(() => {}).catch(() => {});
   }
 
   const persist = useCallback((nextItems, nextOrder) => {
@@ -78,6 +173,7 @@ export default function MassUploadConsole() {
       });
       return next;
     });
+    syncToSupabase(item);
   }
 
   // ---- intake: paste addresses ----
@@ -93,13 +189,11 @@ export default function MassUploadConsole() {
         if (idx === 0 && /address/i.test(cols[0])) return; // header row
         if (!cols[0]) return;
         const maybeLat = parseFloat(cols[1]), maybeLon = parseFloat(cols[2]);
-        upsert({
-          id: uid(), address: cols[0],
+        upsert(blankItem(cols[0], {
           lat: Number.isFinite(maybeLat) ? cols[1] : null,
           lon: Number.isFinite(maybeLon) ? cols[2] : null,
-          dataUrl: null, damageScore: null, damageNotes: null,
-          permitWithin10y: false, permitNotes: "Not checked", stage: "queued", log: ["Imported from CSV"],
-        });
+          log: ["Imported from CSV"],
+        }));
       });
     };
     reader.readAsText(file);
@@ -111,19 +205,26 @@ export default function MassUploadConsole() {
       const raw = localStorage.getItem("propintel:properties");
       const props = raw ? JSON.parse(raw) : {};
       const id = uid();
+      const images = DOMAINS.filter((d) => it.images[d]).map((d) => ({
+        id: uid(), domain: d, dataUrl: it.images[d].dataUrl, mediaType: it.images[d].mediaType, uploadedAt: nowIso(),
+      }));
+      const scoredDomains = DOMAINS.filter((d) => it.scores[d]);
       props[id] = {
         id, address: it.address, lat: it.lat || "", lon: it.lon || "",
         parcelId: "", permitId: "", roofType: "", buildingAge: "", roofPitch: "",
         createdAt: nowIso(),
         folders: {
-          images: it.dataUrl ? [{ id: uid(), domain: "roof", dataUrl: it.dataUrl, mediaType: "image/jpeg", uploadedAt: nowIso() }] : [],
-          drone: [], street: [], historical: [], weather: [],
+          images, drone: [], street: [], historical: [], weather: [],
           permits: it.permitNotes && it.permitNotes !== "Not checked" ? [{ id: uid(), text: `[From batch] ${it.permitNotes}`, at: nowIso() }] : [],
           inspectionReports: [], contractorNotes: [],
-          aiFindings: it.damageScore !== null ? [{ id: uid(), at: nowIso(), results: [{ domain: "roof", concern_score: it.damageScore, notes: it.damageNotes }], findingsScore: it.damageScore }] : [],
+          aiFindings: scoredDomains.length ? [{
+            id: uid(), at: nowIso(),
+            results: scoredDomains.map((d) => ({ domain: d, concern_score: it.scores[d].score, notes: it.scores[d].notes })),
+            findingsScore: combinedScore(it),
+          }] : [],
           repairs: [], timeline: [{ id: uid(), at: nowIso(), text: "Promoted from batch pipeline" }],
         },
-        findingsScore: it.damageScore, suggestedActions: [],
+        findingsScore: combinedScore(it), suggestedActions: [],
       };
       localStorage.setItem("propintel:properties", JSON.stringify(props));
       upsert({ ...it, log: [...it.log, "Promoted to deep-dive console"] });
@@ -148,13 +249,10 @@ export default function MassUploadConsole() {
       const data = await res.json();
       if (!data.ok) { setZipResult({ error: data.error, debug: data.debug }); setZipScanning(false); return; }
       data.addresses.forEach((a) => {
-        upsert({
-          id: uid(), address: a.address,
+        upsert(blankItem(a.address, {
           lat: a.lat || null, lon: a.lon || null,
-          dataUrl: null, damageScore: null, damageNotes: null,
-          permitWithin10y: false, permitNotes: "Not checked",
-          stage: "queued", log: [`Imported from ZIP ${data.zip} scan`],
-        });
+          log: [`Imported from ZIP ${data.zip} scan`],
+        }));
       });
       setZipResult({ count: data.count, city: data.city, state: data.state });
     } catch (e) {
@@ -165,19 +263,19 @@ export default function MassUploadConsole() {
 
   function queueAddresses() {
     const lines = addressText.split("\n").map((l) => l.trim()).filter(Boolean);
-    lines.forEach((address) => {
-      upsert({ id: uid(), address, lat: null, lon: null, dataUrl: null, damageScore: null, damageNotes: null, permitWithin10y: false, permitNotes: "Not checked", stage: "queued", log: [] });
-    });
+    lines.forEach((address) => upsert(blankItem(address)));
     setAddressText("");
   }
 
-  // ---- intake: drop/select images (address optional, editable inline) ----
+  // ---- intake: drop/select images (address optional, editable inline; tagged as roof by default) ----
   function handleFiles(fileList) {
     Array.from(fileList).forEach((file) => {
       if (!file.type.startsWith("image/")) return;
       const reader = new FileReader();
       reader.onload = () => {
-        upsert({ id: uid(), address: file.name.replace(/\.[a-z]+$/i, ""), lat: null, lon: null, dataUrl: reader.result, damageScore: null, damageNotes: null, permitWithin10y: false, permitNotes: "Not checked", stage: "queued", log: [] });
+        upsert(blankItem(file.name.replace(/\.[a-z]+$/i, ""), {
+          images: { roof: { dataUrl: reader.result, mediaType: file.type, source: "manual upload" }, tree: null, driveway: null },
+        }));
       };
       reader.readAsDataURL(file);
     });
@@ -195,20 +293,41 @@ export default function MassUploadConsole() {
   }
 
   async function fetchImagery(item) {
-    if (item.dataUrl || !item.lat || !item.lon) return item;
+    const needsAny = DOMAINS.some((d) => !item.images[d]);
+    if (!needsAny || !item.lat || !item.lon) return item;
     try {
       const res = await fetch("/api/imagery-agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat: item.lat, lon: item.lon }) });
       const data = await res.json();
-      if (data.dataUrl) {
-        // Keep every roofline-angle shot alongside the primary tile — batch
-        // triage now sees the same angles the deep-dive console does, just
-        // without the 3x averaging/verification pass (cost control at volume).
-        const extraAngles = data.angles
-          ? Object.entries(data.angles).filter(([k]) => k.includes("roofline") || k === "overview_tight").map(([, v]) => v)
-          : [];
-        return { ...item, dataUrl: data.dataUrl, extraImages: extraAngles, log: [...item.log, `Imagery auto-fetched (${data.provider}) — ${1 + extraAngles.length} angle(s)`] };
+      if (data.error) return { ...item, log: [...item.log, data.notes || data.error] };
+
+      const angles = data.angles || {};
+      const roofline = Object.entries(angles).filter(([k]) => k.includes("roofline")).map(([, v]) => v);
+      const images = { ...item.images };
+
+      // One imagery-agent call returns several distinct vantage points — assign
+      // the tight parcel crop + roofline street shots to roof, the hybrid
+      // road/label overlay (or wider context shot) to driveway, and the context
+      // shot to tree, instead of discarding everything but one image like before.
+      // Every domain falls back through whatever angle IS available (tight can
+      // fail independently of context under concurrent load on the free Esri
+      // tier — seen in practice — so roof needs the same fallback chain the
+      // other two domains already had, or a flaky tight fetch means roof silently
+      // gets no image while tree/driveway do).
+      if (!images.roof) {
+        const src = angles.overview_tight || data.dataUrl || angles.overview_context;
+        if (src) images.roof = { dataUrl: src, mediaType: "image/jpeg", source: `auto (${data.provider})`, extra: roofline };
       }
-      return { ...item, log: [...item.log, data.notes || data.error || "Imagery unavailable"] };
+      if (!images.driveway) {
+        const src = angles.overview_hybrid_labeled || angles.overview_context || angles.overview_tight || data.dataUrl;
+        if (src) images.driveway = { dataUrl: src, mediaType: "image/jpeg", source: `auto (${data.provider})` };
+      }
+      if (!images.tree) {
+        const src = angles.overview_context || angles.overview_tight || data.dataUrl;
+        if (src) images.tree = { dataUrl: src, mediaType: "image/jpeg", source: `auto (${data.provider})` };
+      }
+
+      const gotCount = DOMAINS.filter((d) => images[d]).length;
+      return { ...item, images, log: [...item.log, `Imagery auto-fetched (${data.provider}) — ${gotCount}/3 domain image(s) ready`] };
     } catch { return { ...item, log: [...item.log, "Imagery fetch failed"] }; }
   }
 
@@ -234,23 +353,39 @@ export default function MassUploadConsole() {
     return { base64Image: m[2], mediaType: m[1] };
   }
 
-  async function runDamage(item) {
-    if (!item.dataUrl) return { ...item, damageNotes: "No image — manual review", log: [...item.log, "Skipped vision (no image)"] };
-    if (item.permitWithin10y) return { ...item, damageNotes: "Skipped — low priority by permit rule", log: [...item.log, "Skipped vision (10-year permit rule)"] };
+  async function runDamageForDomain(item, domain) {
+    const imgObj = item.images[domain];
+    if (!imgObj) return null;
+    const primary = toImagePayload(imgObj.dataUrl);
+    if (!primary) return { score: null, notes: "Unreadable image data", provider: null };
+    const extras = (imgObj.extra || []).map(toImagePayload).filter(Boolean);
+    const images = [primary, ...extras];
     try {
-      const primary = toImagePayload(item.dataUrl);
-      if (!primary) return { ...item, damageNotes: "Unreadable image data", log: [...item.log, "Bad image data"] };
-      const extras = (item.extraImages || []).map(toImagePayload).filter(Boolean);
-      const images = [primary, ...extras];
       const res = await fetch("/api/damage-agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain: "roof", images, address: item.address }),
+        body: JSON.stringify({ domain, images, address: item.address }),
       });
       const data = await res.json();
-      if (data.error) return { ...item, damageNotes: data.error, log: [...item.log, "Vision error: " + data.error] };
-      return { ...item, damageScore: data.concern_score, damageNotes: `${data.notes || ""} [${data.provider}, ${images.length} angle(s)]`, log: [...item.log, `Damage scored ${data.concern_score} (${data.confidence}) across ${images.length} angle(s)`] };
-    } catch (e) { return { ...item, damageNotes: "Vision call failed", log: [...item.log, "Vision call failed: " + e.message] }; }
+      if (data.error) return { score: null, notes: data.error, provider: null };
+      return { score: data.concern_score, notes: `${data.notes || ""} [${data.provider}, ${images.length} angle(s)]`, provider: data.provider };
+    } catch (e) {
+      return { score: null, notes: "Vision call failed: " + e.message, provider: null };
+    }
+  }
+
+  async function runDamage(item) {
+    if (item.permitWithin10y) return { ...item, log: [...item.log, "Skipped vision (10-year permit rule)"] };
+    const scores = { ...item.scores };
+    const logs = [];
+    for (const domain of DOMAINS) {
+      if (!item.images[domain]) { logs.push(`${DOMAIN_LABELS[domain]}: no image — manual review`); continue; }
+      const r = await runDamageForDomain(item, domain);
+      if (!r) continue;
+      scores[domain] = r.score !== null ? { score: r.score, notes: r.notes, provider: r.provider } : null;
+      logs.push(r.score !== null ? `${DOMAIN_LABELS[domain]} scored ${r.score}` : `${DOMAIN_LABELS[domain]}: vision error — ${r.notes}`);
+    }
+    return { ...item, scores, log: [...item.log, ...logs] };
   }
 
   // keep refs so runAll reads current state mid-loop
@@ -311,7 +446,7 @@ export default function MassUploadConsole() {
   function retryFailed() {
     order.forEach((id) => {
       const it = items[id];
-      if (it && it.stage === "done" && (it.damageScore === null && !it.permitWithin10y)) {
+      if (it && it.stage === "done" && !it.permitWithin10y && combinedScore(it) === null) {
         upsert({ ...it, stage: "queued", log: [...it.log, "Re-queued for retry"] });
       }
     });
@@ -320,11 +455,16 @@ export default function MassUploadConsole() {
   function removeItem(id) {
     const next = { ...items }; delete next[id];
     persist(next, order.filter((o) => o !== id));
+    if (supabase) supabase.from("batch_leads").delete().eq("id", id).then(() => {}).catch(() => {});
   }
 
   function exportCsv() {
-    const header = ["tier", "address", "lat", "lon", "damage_score", "permit_within_10y", "permit_notes", "damage_notes"];
-    const rows = order.map((id) => items[id]).filter(Boolean).map((it) => [tierOf(it), it.address, it.lat || "", it.lon || "", it.damageScore ?? "", it.permitWithin10y, it.permitNotes, it.damageNotes || ""]);
+    const header = ["tier", "address", "lat", "lon", "roof_score", "tree_score", "driveway_score", "permit_within_10y", "permit_notes"];
+    const rows = order.map((id) => items[id]).filter(Boolean).map((it) => [
+      tierOf(it), it.address, it.lat || "", it.lon || "",
+      it.scores.roof?.score ?? "", it.scores.tree?.score ?? "", it.scores.driveway?.score ?? "",
+      it.permitWithin10y, it.permitNotes,
+    ]);
     const csv = [header.join(",")].concat(rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -337,14 +477,25 @@ export default function MassUploadConsole() {
   const tierRank = { hot: 0, warm: 1, cool: 2, cold: 3, unscored: 4, "low-priority": 5 };
   const sorted = order.map((id) => items[id]).filter(Boolean).sort((a, b) => tierRank[tierOf(a)] - tierRank[tierOf(b)]);
 
+  function updateDomainImage(itemId, domain, dataUrl) {
+    const it = items[itemId];
+    if (!it) return;
+    const nextImages = { ...it.images, [domain]: { ...it.images[domain], dataUrl } };
+    const nextScores = { ...it.scores, [domain]: null };
+    upsert({ ...it, images: nextImages, scores: nextScores, stage: "queued", log: [...it.log, `${DOMAIN_LABELS[domain]} image enhanced/edited — re-run pipeline to rescore`] });
+  }
+
   return (
     <div style={{ minHeight: "100vh", background: SLATE, color: TEXT, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 36px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: `1px solid ${LINE}`, paddingBottom: 14, marginBottom: 20 }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI</div>
           <h1 style={{ fontSize: 22, margin: "4px 0 0" }}>Mass Upload — Autonomous Batch Pipeline</h1>
-          <p style={{ color: MUTE, fontSize: 13, margin: "6px 0 0", maxWidth: 640 }}>
-            Paste addresses or drop images. One click runs everything: geocode → satellite imagery → permit directory check (10-year rule) → damage vision → ranked output.
+          <p style={{ color: MUTE, fontSize: 13, margin: "6px 0 0", maxWidth: 680 }}>
+            Paste addresses or drop images. One click runs everything: geocode → satellite imagery (roof + tree + driveway) → permit directory check (10-year rule) → damage vision across all 3 domains → ranked output.
+          </p>
+          <p style={{ color: supabase ? GREEN : MUTE, fontSize: 11.5, margin: "6px 0 0" }}>
+            {supabase ? "✓ Queue synced to Supabase — durable across devices/sessions." : "Queue stored locally in this browser only. Set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY (see supabase_batch_leads_schema.sql) for a durable, cross-device queue."}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -425,17 +576,31 @@ export default function MassUploadConsole() {
           const tier = tierOf(it);
           return (
             <div key={it.id} style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, overflow: "hidden" }}>
-              <div style={{ position: "relative", height: 150, background: PANEL2 }}>
-                {it.dataUrl
-                  ? <img src={it.dataUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 12 }}>{it.stage === "done" ? "No imagery — manual review" : "Awaiting imagery"}</div>}
+              <div style={{ position: "relative" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: LINE }}>
+                  {DOMAINS.map((domain) => {
+                    const img = it.images[domain];
+                    const score = it.scores[domain]?.score;
+                    return (
+                      <div key={domain} style={{ position: "relative", height: 96, background: PANEL2 }}>
+                        {img
+                          ? <img src={img.dataUrl} alt={domain} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: MUTE, fontSize: 10, textAlign: "center", padding: 4 }}>{it.stage === "done" ? "No image" : "Awaiting"}</div>}
+                        <span style={{ position: "absolute", top: 4, left: 4, padding: "2px 6px", borderRadius: 10, fontSize: 9, fontWeight: 700, background: "rgba(13,20,32,.85)", color: TEXT }}>{DOMAIN_LABELS[domain]}</span>
+                        {score !== null && score !== undefined && (
+                          <span style={{ position: "absolute", top: 4, right: 4, padding: "2px 6px", borderRadius: 10, fontSize: 9, fontWeight: 700, background: "rgba(13,20,32,.85)", color: score >= 75 ? SIGNAL : score >= 50 ? AMBER : score >= 25 ? BLUE : MUTE }}>{score}</span>
+                        )}
+                        {img && (
+                          <button onClick={() => setEditor({ itemId: it.id, domain })} style={{ position: "absolute", bottom: 4, right: 4, padding: "2px 6px", background: "rgba(13,20,32,.85)", border: `1px solid ${LINE}`, borderRadius: 5, color: BLUE, fontSize: 9.5, cursor: "pointer" }}>
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
                 <span style={{ position: "absolute", top: 8, left: 8, padding: "3px 9px", borderRadius: 20, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", background: "rgba(13,20,32,.85)", color: TIER_COLORS[tier] }}>{tier}</span>
                 <button onClick={() => removeItem(it.id)} style={{ position: "absolute", top: 6, right: 6, background: "rgba(13,20,32,.8)", border: "none", color: TEXT, width: 22, height: 22, borderRadius: "50%", cursor: "pointer", fontSize: 13, lineHeight: 1 }}>×</button>
-                {it.dataUrl && (
-                  <button onClick={() => setEditorId(it.id)} style={{ position: "absolute", bottom: 6, right: 6, padding: "4px 10px", background: "rgba(13,20,32,.85)", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 11, cursor: "pointer" }}>
-                    Zoom / Enhance
-                  </button>
-                )}
               </div>
               <div style={{ padding: "10px 12px" }}>
                 <input
@@ -444,7 +609,6 @@ export default function MassUploadConsole() {
                   style={{ width: "100%", background: "transparent", border: "none", borderBottom: `1px solid ${LINE}`, color: TEXT, fontSize: 13, fontWeight: 600, padding: "2px 0", marginBottom: 6, boxSizing: "border-box" }}
                 />
                 <div style={{ fontSize: 11.5, color: MUTE, lineHeight: 1.5 }}>
-                  <div>Damage: <b style={{ color: TEXT }}>{it.damageScore ?? "—"}</b>{it.damageNotes ? <span title={it.damageNotes}> ⓘ</span> : null}</div>
                   <div title={it.permitNotes}>Permit: {it.permitWithin10y ? <b style={{ color: "#8a6bd1" }}>within 10y → low priority</b> : it.permitNotes}</div>
                   <div style={{ fontFamily: "monospace", fontSize: 10.5 }}>{it.lat && it.lon ? `${Number(it.lat).toFixed(4)}, ${Number(it.lon).toFixed(4)}` : "no coords"} · {it.stage}</div>
                 </div>
@@ -459,11 +623,12 @@ export default function MassUploadConsole() {
         })}
       </div>
 
-      {editorId && items[editorId] && (
+      {editor && items[editor.itemId]?.images[editor.domain] && (
         <ImageEditor
-          item={items[editorId]}
-          onClose={() => setEditorId(null)}
-          onSave={(newDataUrl) => { upsert({ ...items[editorId], dataUrl: newDataUrl, damageScore: null, damageNotes: "Image edited — re-run pipeline to rescore", stage: "queued", log: [...items[editorId].log, "Image enhanced/edited"] }); setEditorId(null); }}
+          item={items[editor.itemId]}
+          domain={editor.domain}
+          onClose={() => setEditor(null)}
+          onSave={(newDataUrl) => { updateDomainImage(editor.itemId, editor.domain, newDataUrl); setEditor(null); }}
         />
       )}
     </div>
@@ -475,11 +640,13 @@ function StatsStrip({ items, order }) {
   const counts = { hot: 0, warm: 0, cool: 0, cold: 0, "low-priority": 0, unscored: 0 };
   all.forEach((it) => { counts[tierOf(it)]++; });
   const doneCount = all.filter((it) => it.stage === "done").length;
-  const scored = all.filter((it) => it.damageScore !== null && it.damageScore !== undefined);
-  const avg = scored.length ? Math.round(scored.reduce((s, it) => s + it.damageScore, 0) / scored.length) : "—";
+  const scored = all.map((it) => combinedScore(it)).filter((s) => s !== null);
+  const avg = scored.length ? Math.round(scored.reduce((s, v) => s + v, 0) / scored.length) : "—";
+  const fullImagery = all.filter((it) => DOMAINS.every((d) => it.images[d])).length;
   const cells = [
     ["Hot", counts.hot, SIGNAL], ["Warm", counts.warm, AMBER], ["Cool", counts.cool, BLUE], ["Cold", counts.cold, MUTE],
-    ["Low priority (10y rule)", counts["low-priority"], "#8a6bd1"], ["Avg damage", avg, TEXT], ["Processed", `${doneCount}/${all.length}`, TEXT],
+    ["Low priority (10y rule)", counts["low-priority"], "#8a6bd1"], ["Avg damage", avg, TEXT],
+    ["3/3 imagery", `${fullImagery}/${all.length}`, TEXT], ["Processed", `${doneCount}/${all.length}`, TEXT],
   ];
   if (!all.length) return null;
   return (
@@ -495,7 +662,7 @@ function StatsStrip({ items, order }) {
 }
 
 // ---- Zoom / Edit / Enhance modal — pure canvas, no dependencies ----
-function ImageEditor({ item, onClose, onSave }) {
+function ImageEditor({ item, domain, onClose, onSave }) {
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
   const [zoom, setZoom] = useState(1);
@@ -505,13 +672,14 @@ function ImageEditor({ item, onClose, onSave }) {
   const [saturation, setSaturation] = useState(100);
   const [sharpen, setSharpen] = useState(false);
   const dragRef = useRef(null);
+  const dataUrl = item.images[domain].dataUrl;
 
   useEffect(() => {
     const img = new Image();
     img.onload = () => { imgRef.current = img; draw(); };
-    img.src = item.dataUrl;
+    img.src = dataUrl;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.dataUrl]);
+  }, [dataUrl]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current, img = imgRef.current;
@@ -555,7 +723,7 @@ function ImageEditor({ item, onClose, onSave }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(5,8,14,.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={onClose}>
       <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 12, padding: 18, width: 720, maxWidth: "94vw" }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-          <b style={{ fontSize: 14 }}>Zoom / Enhance — {item.address}</b>
+          <b style={{ fontSize: 14 }}>Zoom / Enhance — {DOMAIN_LABELS[domain]} — {item.address}</b>
           <button onClick={onClose} style={{ background: "none", border: "none", color: MUTE, cursor: "pointer", fontSize: 16 }}>×</button>
         </div>
         <canvas
@@ -582,7 +750,7 @@ function ImageEditor({ item, onClose, onSave }) {
             <button onClick={save} style={btnPrimary}>Save enhanced image</button>
           </div>
         </div>
-        <p style={{ fontSize: 11, color: MUTE, marginTop: 8, marginBottom: 0 }}>Drag to pan, scroll to zoom. Saving replaces the image for this lead and re-queues it so the next pipeline run scores the enhanced version.</p>
+        <p style={{ fontSize: 11, color: MUTE, marginTop: 8, marginBottom: 0 }}>Drag to pan, scroll to zoom. Saving replaces this domain's image for this lead and re-queues it so the next pipeline run scores the enhanced version.</p>
       </div>
     </div>
   );
