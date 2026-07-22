@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import supabase from "../lib/supabaseClient";
 
 // ---- palette matched to PropertyIntelligenceConsole ----
 const SLATE = "#0d1420", PANEL = "#131c2b", PANEL2 = "#0f1725", LINE = "#22304a";
@@ -36,9 +36,9 @@ function parseAddressParts(address) {
 // Queue durability: if Supabase is configured, the queue (addresses, scores,
 // permit status — NOT images, which stay client-side) syncs there instead of
 // living only in this browser's localStorage. See supabase_batch_leads_schema.sql.
-const SUPABASE_URL = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_URL : null;
-const SUPABASE_ANON_KEY = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY : null;
-const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+// Uses the shared client (lib/supabaseClient.js) instead of creating its own —
+// that module wraps createClient in try/catch, so a malformed URL/key in env
+// vars degrades to "Supabase unavailable" instead of crashing the whole page.
 
 function combinedScore(item) {
   const scores = DOMAINS.map((d) => item.scores?.[d]?.score).filter((s) => s !== null && s !== undefined);

@@ -43,14 +43,23 @@ export default function AuthGate({ children }) {
       setAuthChecked(true);
       return;
     }
-    supabase.auth.getSession().then(({ data }) => {
-      if (data?.session) setLoggedIn(true);
+    // Defensive: a misconfigured URL/key (e.g. malformed env var) can make
+    // these calls reject or throw. Without a .catch()/try here, that's an
+    // unhandled rejection that crashes the whole app for every page (this
+    // component wraps everything via layout.jsx) instead of just falling
+    // back to the password gate.
+    try {
+      supabase.auth.getSession()
+        .then(({ data }) => { if (data?.session) setLoggedIn(true); })
+        .catch(() => {})
+        .finally(() => setAuthChecked(true));
+      const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (session) setLoggedIn(true);
+      });
+      return () => sub?.subscription?.unsubscribe();
+    } catch {
       setAuthChecked(true);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) setLoggedIn(true);
-    });
-    return () => sub?.subscription?.unsubscribe();
+    }
   }, []);
 
   function unlockWithPassword() {
