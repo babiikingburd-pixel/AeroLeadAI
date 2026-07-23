@@ -17,6 +17,8 @@ const TABS = [
   { href: "/jobs", label: "Jobs" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/crm", label: "CRM" },
+  { href: "/ops", label: "Ops Center" },
+  { href: "/intelligence", label: "Intelligence" },
 ];
 
 export default function TopNav() {

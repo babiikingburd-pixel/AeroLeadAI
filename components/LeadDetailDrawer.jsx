@@ -6,9 +6,10 @@ import ConfidenceCard from "./ConfidenceCard";
 import ReportGenerator from "./ReportGenerator";
 import SalesIntelligencePanel from "./SalesIntelligencePanel";
 import ImageryCompare from "./ImageryCompare";
+import PropertyProfilePanel from "./PropertyProfilePanel";
 
 const AMBER = "#f5a623", PANEL = "#141b26", LINE = "#232f3e", MUTE = "#6b7c93", GREEN = "#4caf7d", BLUE = "#2e7dd1";
-const TABS = ["Overview", "Notes", "Tasks", "Calendar", "Communications", "Imagery", "Report", "Scoring"];
+const TABS = ["Overview", "Profile", "Notes", "Tasks", "Calendar", "Communications", "Imagery", "Report", "Scoring"];
 
 // Advanced CRM Automation — full lead detail: notes log, task management,
 // calendar (.ics) integration, and email/SMS logging, alongside the
@@ -54,6 +55,7 @@ export default function LeadDetailDrawer({ lead, onClose, onChange }) {
         </div>
 
         {tab === "Overview" && <ConfidenceCard lead={lead} />}
+        {tab === "Profile" && <PropertyProfilePanel lead={lead} />}
 
         {tab === "Notes" && (
           <div>

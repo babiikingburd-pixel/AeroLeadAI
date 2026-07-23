@@ -143,3 +143,22 @@ Console, Batch, and Scanner all write into one shared lead store (`aeroleadai_le
 7. **AI Lead Scoring & Sales Intelligence** — `/api/lead-score` produces roof age estimate, damage severity, insurance claim probability, estimated repair value, and a priority rank (Lead Detail drawer's Scoring tab). The Dashboard's revenue KPI now risk-adjusts by claim probability for every AI-scored lead instead of a flat average.
 
 New env vars (all optional, all with honest fallbacks): `NEARMAP_API_KEY`, `PLANET_API_KEY`, `SENTINEL_HUB_CLIENT_ID`/`SENTINEL_HUB_CLIENT_SECRET`, `EMAIL_WEBHOOK_URL`, `SMS_WEBHOOK_URL`. See `.env.example`.
+
+## v4 upgrades (Property Intelligence, Ops, BI, Customer Portal)
+
+Run `supabase_ops_schema.sql` for the `contractors` and `jobs` tables behind
+these four — Property Intelligence's job creation, Ops Center, BI Engine,
+and the Customer Portal all need it. No new env vars; everything reuses the
+AI/imagery/Supabase keys already configured.
+
+1. **Property Intelligence Engine** (Lead Detail drawer → Profile tab) — combines imagery, weather, permits, and an AI roof measurement already on the lead into one profile, then computes (free, instant, no AI call) a replacement-cost estimate, a deterministic risk score, and an auto-qualification tier via `lib/propertyIntelligence.js` — complements rather than duplicates the AI-based `/api/lead-score`. Also shows AI-annotated damage bounding boxes (`/api/damage-annotate`, `RoofAnnotationViewer.jsx`) drawn directly on the property image. Parcel/ownership data is honestly not included — that needs a county GIS API, a vendor decision. From here you can create a job + generate a Customer Portal link.
+2. **Autonomous Operations Command Center** (`/ops`) — national map of jobs (color-coded by status) and contractors, revenue (completed vs. pipeline), a live system-health self-check (AI provider, imagery provider, Supabase, and real pings to Overpass/Nominatim/NWS), weather alerts for active job locations, average AI confidence, and an exception queue computed from real conditions (unassigned active jobs, high-score-but-low-confidence leads, overdue schedules) — not a simulated alert feed. Contractor locations are manually set / last check-in, not live GPS (needs a mobile app or phone location source — a product decision). AI voice activity isn't included (no telephony vendor configured).
+3. **AI Business Intelligence Engine** (`/intelligence`) — demand by ZIP, a revenue trend (honestly reports "insufficient data" under ~4 completed jobs instead of faking a forecast), underserved-market/contractor-recruiting targets (lead volume vs. contractor ZIP coverage), a pricing signal (actual vs. estimated revenue ratio on completed jobs), contractor performance (completion rate, on-time rate, revenue), and straight-line dispatch suggestions. All computed from your own data (`lib/businessIntelligence.js`) — no simulated numbers, and small-sample caveats are surfaced, not hidden. No automated model retraining loop (that needs real completed-job volume to be worth building) — this tracks calibration (estimate vs. actual) rather than claiming to self-improve.
+4. **Customer Intelligence Portal** (`/portal/[token]`, partial) — token-gated (not the internal password/magic-link gate — homeowners aren't staff), shows the instant estimate, AI damage score, property history timeline, and an AI chat grounded in that specific job's real data (`/api/portal-chat`) so it can't invent scheduling/pricing details. Live technician tracking, digital contracts, and in-app payments are clearly labeled as needing a GPS/location source, an e-signature vendor, and a payment processor respectively — stubbed honestly, not faked, since those are vendor/account decisions this can't make for you.
+
+### What's deliberately NOT included (needs a business/vendor decision first)
+- **In-app payments** — needs a Stripe (or similar) account; real money movement and PCI compliance aren't something to wire up speculatively.
+- **Live GPS technician tracking** — needs a mobile app or phone-based location source.
+- **AI voice** — needs a telephony/voice vendor (e.g. Bland.ai, Twilio); a real account and cost commitment.
+- **Digital e-signature contracts** — needs a DocuSign-style vendor.
+- **Insurance/property-management integrations, franchise/territory management, white-label, multi-region scaling** — these are business partnerships and a multi-tenancy redesign, not something to code speculatively without those relationships in place.

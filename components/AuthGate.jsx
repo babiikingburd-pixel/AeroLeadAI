@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import supabase from "../lib/supabaseClient";
 
 // Shared password gate for early sharing/demos. This is NOT real auth —
@@ -19,6 +20,7 @@ const MUTE = "#6b7c93";
 const GREEN = "#3ddc84";
 
 export default function AuthGate({ children }) {
+  const pathname = usePathname();
   const [loggedIn, setLoggedIn] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
@@ -78,6 +80,10 @@ export default function AuthGate({ children }) {
     if (error) setMagicError(error.message);
     else setMagicSent(true);
   }
+
+  // Customer Portal (/portal/[token]) is for homeowners, not internal staff —
+  // it's protected by its own unguessable per-job token instead of this gate.
+  if (pathname?.startsWith("/portal/")) return children;
 
   if (!authChecked) return null;
 

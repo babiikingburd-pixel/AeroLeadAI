@@ -1,5 +1,5 @@
 import AuthGate from "../components/AuthGate";
-import TopNav from "../components/TopNav";
+import ConditionalTopNav from "../components/ConditionalTopNav";
 
 export const metadata = {
   title: "AeroLeadAI Property Intelligence",
@@ -11,7 +11,7 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <body style={{ margin: 0, background: "#0b0f16" }}>
         <AuthGate>
-          <TopNav />
+          <ConditionalTopNav />
           {children}
         </AuthGate>
       </body>
