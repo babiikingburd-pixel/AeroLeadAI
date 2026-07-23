@@ -162,3 +162,66 @@ AI/imagery/Supabase keys already configured.
 - **AI voice** — needs a telephony/voice vendor (e.g. Bland.ai, Twilio); a real account and cost commitment.
 - **Digital e-signature contracts** — needs a DocuSign-style vendor.
 - **Insurance/property-management integrations, franchise/territory management, white-label, multi-region scaling** — these are business partnerships and a multi-tenancy redesign, not something to code speculatively without those relationships in place.
+
+## v5 upgrades (Phase 2 — Growth, Marketing, Quality, Property Records, Enterprise/Developer Platform)
+
+Run `supabase_phase2_schema.sql` for all of this — it adds
+`contractor_candidates`, `campaigns`, `job_audits`, `property_records`,
+`organizations`/`organization_users`, `escrow_holds`, `subscriptions`,
+`api_keys`, `webhook_subscriptions`, `region_launches`, and
+`decisions`/`decision_reports` (used by the Executive Engine below), plus a
+few columns on `contractors`/`batch_leads`/`jobs`. No new env vars — Stripe-
+dependent pieces (escrow, contractor subscriptions) stay at
+`{available:false}` until `STRIPE_SECRET_KEY` exists.
+
+1. **Contractor Growth Engine** (`lib/growth/recruiter.js`, surfaced in `/intelligence`) — candidate submission, license/insurance verification (honest "no provider configured" until you wire one in), onboarding into `contractors`, and a monitoring sweep that suspends contractors on expired insurance or a >50% cancellation rate over 5+ jobs.
+2. **AI Sales & Marketing Engine** (`/crm` → Marketing Campaigns panel) — campaign records by channel/ZIP/budget, a nurture sweep over new/contacted leads, and a budget-reallocation signal computed from real conversion — actually placing ad spend needs `GOOGLE_ADS_API_KEY`/`META_ADS_API_KEY` (not configured), so it logs the recommendation instead of spending money.
+3. **Quality Assurance loop** (`/ops` → Quality Flags panel) — `auditCompletedJob` compares the AI damage summary captured at job creation against a post-completion photo and flags a mismatch for review; satisfaction scores and flagged-job review are wired in too.
+4. **Property Intelligence history** (`lib/property/propertyRecord.js`, `/api/property/records`) — a per-property timeline (inspections, repairs, damage events) independent of any single lead/job record.
+5. **Strategic Advisor + Expansion Playbook + Contractor Benchmarks** (`/intelligence`, bottom panel) — recruitment-target and market-entry recommendations from real ZIP-level demand/supply gaps, a 9-step region-launch checklist tracker, and contractor/regional performance benchmarks — all confidence-labeled since they're naturally sparse until there's more data.
+6. **Enterprise & Developer Platform** (`/enterprise`) — organizations (municipalities, property managers, HOAs, insurers) manage a portfolio of properties and get a spend/open-jobs/flagged-jobs report; scoped API keys (`lib/platformApi.js`) gate a public read endpoint (`GET /api/v1/properties/:id`) to one organization's data.
+7. **Financial reporting** (`lib/financial/financialServices.js`, surfaced on `/enterprise`) — real platform-wide revenue/job-count reporting from the `jobs` table today; escrow, contractor subscriptions, and customer financing are honest `{available:false}` stubs until `STRIPE_SECRET_KEY`/`FINANCING_PARTNER_API_KEY` exist (the real Stripe call shape is commented inline for when they do).
+
+## v6 upgrade (AI Executive Engine — Boardroom)
+
+No new SQL beyond `supabase_phase2_schema.sql` above (it already includes
+`decisions`/`decision_reports`). Uses whichever AI provider is already
+configured (`GROQ_API_KEY` or `ANTHROPIC_API_KEY`) — no separate vendor
+account.
+
+A portable multi-agent "executive team" (`lib/executive/`) that reasons
+about the business the same way a human leadership team would, adapted from
+a standalone engine to plug into AeroLeadAI's actual schema instead of
+running its own:
+
+- **CFO/COO/CMO/CLO/CSO agents** each analyze one real domain — financials
+  (from `jobs`), operations (`jobs`/`batch_leads` pipeline), marketing
+  (`campaigns`/lead conversion), legal/compliance (contractor licensing/
+  insurance expiry), and strategy (lead volume by ZIP) — and return a
+  structured recommendation with a risk level and confidence.
+- **CEO agent** convenes the five and synthesizes one executive summary —
+  available as a quick, no-vote "advisory" mode (`/executive` → Ask the
+  Executive Team) for "how healthy is the business" style questions.
+- **Formal decisions** (`/executive` → Propose a Decision) add a mandatory-
+  dissent **"Fifth Business"** agent whose default vote is NO — it must
+  raise a real, specific objection every round or switch to yes. The team
+  negotiates up to 3 rounds; unanimous agreement approves the action,
+  otherwise it escalates to a human. Any single "high risk" recommendation
+  force-escalates immediately, regardless of vote count.
+- **Governance**: every decision runs in **dry-run by default** — nothing is
+  ever auto-executed against the business. A stuck (escalated) decision can
+  get a **second opinion** from a fresh council (informational only — never
+  auto-applied) before a human calls `resolveByHuman`. Decisions can
+  `dependsOn` another decision and are blocked (not silently run) while that
+  dependency is stuck, so two contradictory approvals never land downstream
+  of an unresolved one.
+- **Tamper-evident audit trail**: every escalation/second-opinion/resolution
+  writes a markdown report to the `decision_reports` table, which has no
+  update/delete RLS policy — a written report can't be edited after the
+  fact, the Supabase equivalent of the original engine's read-only file.
+- **Explicitly not built**: the source package also included a standalone
+  Android app shell and a long-running Node server with in-memory state.
+  Both are architecturally incompatible with Vercel's stateless serverless
+  functions (no persistent process, no app-store publishing pipeline in
+  scope) and were left out — the Boardroom is reachable through `/executive`
+  and its API routes instead.

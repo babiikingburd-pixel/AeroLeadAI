@@ -24,6 +24,7 @@ export default function OpsCommandCenter() {
   const [health, setHealth] = useState(null);
   const [weatherAlerts, setWeatherAlerts] = useState(null);
   const [checkingWeather, setCheckingWeather] = useState(false);
+  const [flaggedJobs, setFlaggedJobs] = useState([]);
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const [mapReady, setMapReady] = useState(false);
@@ -32,6 +33,7 @@ export default function OpsCommandCenter() {
     setJobs(await listJobs());
     setContractors(await listContractors());
     setLeads(importConsoleProperties());
+    fetch("/api/quality/jobs").then((r) => r.json()).then((d) => d.ok && setFlaggedJobs(d.flagged)).catch(() => {});
   }
 
   useEffect(() => {
@@ -194,6 +196,17 @@ export default function OpsCommandCenter() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 14, marginTop: 16 }}>
+        <div style={{ fontSize: 11, color: AMBER, marginBottom: 10, fontFamily: "monospace" }}>QUALITY FLAGS ({flaggedJobs.length})</div>
+        {flaggedJobs.length === 0 && <div style={{ fontSize: 12, color: GREEN }}>No jobs flagged for quality review.</div>}
+        {flaggedJobs.map((f) => (
+          <div key={f.job_id} style={{ fontSize: 12, padding: "6px 0", borderTop: `1px solid ${LINE}` }}>
+            <b>{f.address}</b>{f.contractor ? ` — ${f.contractor}` : ""}: <span style={{ color: RED }}>{f.reason}</span>
+            <div style={{ color: MUTE, marginTop: 2 }}>→ {f.recommended_action}</div>
+          </div>
+        ))}
       </div>
     </div>
   );

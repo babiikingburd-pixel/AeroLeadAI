@@ -19,6 +19,8 @@ const TABS = [
   { href: "/crm", label: "CRM" },
   { href: "/ops", label: "Ops Center" },
   { href: "/intelligence", label: "Intelligence" },
+  { href: "/enterprise", label: "Enterprise" },
+  { href: "/executive", label: "Executive" },
 ];
 
 export default function TopNav() {
