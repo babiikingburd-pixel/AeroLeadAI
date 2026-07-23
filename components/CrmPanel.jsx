@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { loadLeads, importConsoleProperties, setLeadStatus, setFollowUp, LEAD_STATUSES } from "../lib/leadStore";
 import { downloadCsv, overdueFollowUps, optimizeRoute, routeToGoogleMapsUrl } from "../lib/crm";
 import LeadDetailDrawer from "./LeadDetailDrawer";
+import CampaignsPanel from "./CampaignsPanel";
 
 const AMBER = "#f5a623", PANEL = "#141b26", LINE = "#232f3e", MUTE = "#6b7c93", GREEN = "#4caf7d", BLUE = "#2e7dd1", RED = "#e5534b";
 
@@ -82,6 +83,8 @@ export default function CrmPanel() {
         </table>
       </div>
       {selected && <LeadDetailDrawer lead={selected} onClose={() => setSelected(null)} onChange={() => { refresh(); setSelected(loadLeads().find((l) => l.address === selected.address) || null); }} />}
+
+      <CampaignsPanel />
     </div>
   );
 }

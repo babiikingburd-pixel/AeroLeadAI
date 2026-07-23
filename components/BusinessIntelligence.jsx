@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { listJobs, listContractors } from "../lib/opsStore";
 import { importConsoleProperties } from "../lib/leadStore";
 import { demandByZip, revenueForecast, underservedMarkets, contractorPerformance, pricingSignal, suggestDispatch } from "../lib/businessIntelligence";
+import PhaseTwoIntelligencePanel from "./PhaseTwoIntelligencePanel";
 
 const SLATE = "#0d1420", PANEL = "#131c2b", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a";
 const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e", RED = "#ef5a6f";
@@ -115,6 +116,8 @@ export default function BusinessIntelligence() {
           ))}
         </div>
       </div>
+
+      <PhaseTwoIntelligencePanel />
     </div>
   );
 }

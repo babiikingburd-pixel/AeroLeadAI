@@ -45,7 +45,7 @@ export default function PropertyProfilePanel({ lead }) {
 
   async function createJob() {
     setJobMsg("Creating…");
-    const job = await createJobFromLead({ ...lead, estValue: profile.cost.estimateUsd });
+    const job = await createJobFromLead({ ...lead, estValue: profile.cost.estimateUsd }, annotation);
     if (!job) { setJobMsg("Failed — is Supabase configured? (see supabase_ops_schema.sql)"); return; }
     const url = `${window.location.origin}/portal/${job.share_token}`;
     try { await navigator.clipboard.writeText(url); setJobMsg("Job created — portal link copied to clipboard: " + url); }
