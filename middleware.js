@@ -15,6 +15,8 @@ const ROUTE_LIMITS = {
   "/api/imagery-agent": 20,
   "/api/zip-scan": 10,
   "/api/crm-sync": 10,
+  "/api/roof-analysis": 20,
+  "/api/workflow/advance": 10,
 };
 
 const hits = new Map(); // key -> [timestamps]

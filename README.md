@@ -225,3 +225,69 @@ running its own:
   functions (no persistent process, no app-store publishing pipeline in
   scope) and were left out — the Boardroom is reachable through `/executive`
   and its API routes instead.
+
+## Workflow engine, contractor portal, and voice booking
+
+Run `supabase_workflow_schema.sql` after `supabase_ops_schema.sql`. Real, working
+code for four pieces — an end-to-end lead pipeline, automated AI roof analysis,
+a contractor-facing portal, and AI voice booking — with the same honesty about
+what still needs your own accounts/keys as everything else in this README.
+
+1. **End-to-end workflow** (`lib/workflow/pipeline.js`, `stages.js`) — a state
+   machine enforcing the exact order DISCOVER → ANALYZE → QUALIFY → CONTACT →
+   BOOK → DISPATCH → COMPLETE → PAY → REVIEW on rows in the new `leads` table.
+   `POST /api/workflow/advance` with `{ leadId }` advances one lead by one
+   stage, or with no body sweeps every non-terminal lead — point a Vercel
+   Cron job (or scheduled Supabase function) at it to move the whole pipeline
+   forward automatically. Each call advances a lead by exactly one stage, on
+   purpose, so a single cron tick can't silently run a lead through AI calls,
+   a phone call, and a Stripe charge all at once.
+2. **Automated AI roof analysis** (`lib/ai/roofAnalysis.js`, used by the
+   ANALYZE stage) — fetches its own Google Static Maps image from lat/lon
+   (needs `GOOGLE_MAPS_API_KEY`) so the pipeline can run with no browser or
+   human present, sends it to the vision model, and returns damage findings
+   plus rough measurements and a transparent cost estimate. Its output shape
+   matches the existing `/api/damage-annotate` route's schema on purpose, so
+   the existing `components/RoofAnnotationViewer.jsx` canvas overlay (click a
+   box to see the description) works against either source unmodified — this
+   isn't a second annotation viewer, it feeds the one already in the app.
+3. **Contractor portal** (`/contractor-portal`, `app/api/contractor/*`) — job
+   accept/decline, the AI estimate + annotated imagery for each job, and
+   mark-complete. `/api/contractor/performance` computes acceptance rate,
+   completion rate, and avg turnaround from job history and rolls it into
+   `contractors.performance_score`, which is what DISPATCH ranks contractors
+   by. Auth is an honest placeholder — a per-contractor unguessable access
+   code (`contractors.portal_access_code`, same shape as `jobs.share_token`),
+   not a full login system; swap for real Supabase Auth before this touches
+   contractors you don't personally vouch for.
+4. **Bland AI voice booking** (`lib/bland/`) — `pathway.json` is an importable
+   Bland Pathway (bland.ai dashboard → Pathways → Import): greeting → qualify
+   interest → offer appointment times → confirm, escalating to a live
+   transfer automatically if the caller is distressed, confused, or asks for
+   a human. `lib/bland/client.js` places the CONTACT-stage outbound call;
+   `app/api/bland/webhook/route.js` receives Bland's post-call event and
+   writes consent + the requested appointment time onto the lead, which is
+   what lets BOOK proceed.
+
+**Payments** (`lib/contractors/payments.js`, the PAY stage) use real Stripe
+Connect calls — `stripe` is an actual dependency here (unlike
+`lib/financial/financialServices.js`'s deliberate stubs) — charging the
+homeowner's saved payment method and transferring the payout to the
+contractor's connected account minus a 12% platform fee, logged in
+`escrow_holds` as an audit trail. **What you still have to build yourself:**
+nothing here collects the homeowner's card or walks a contractor through
+Connect onboarding — that's a Stripe Checkout/SetupIntent flow and a Connect
+onboarding link you still need to wire up, writing to
+`jobs.stripe_customer_id` / `jobs.stripe_payment_method_id` and
+`contractors.stripe_account_id` respectively. Without those, PAY stays put
+and reports exactly why in plain English instead of pretending to charge anyone.
+
+### What you must do yourself (workflow/portal/voice/payments)
+| Needed | Where |
+|---|---|
+| Run `supabase_workflow_schema.sql` | Supabase SQL editor |
+| Set a `portal_access_code` per contractor and send it to them | you generate/distribute manually, or query the DB — no admin UI for this yet |
+| `BLAND_API_KEY`, import `lib/bland/pathway.json` for `BLAND_QUALIFY_PATHWAY_ID`, set `BLAND_WEBHOOK_SECRET` as the pathway's webhook custom header | bland.ai dashboard |
+| `APP_BASE_URL` set to your real deployment URL | Vercel env vars |
+| `STRIPE_SECRET_KEY`, plus a card-collection flow and Connect onboarding (not included) | stripe.com |
+| A scheduled call to `POST /api/workflow/advance` (empty body) | Vercel Cron or a scheduled Supabase function |

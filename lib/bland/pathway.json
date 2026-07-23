@@ -1,0 +1,85 @@
+{
+  "name": "AeroLeadAI Roof Qualify",
+  "description": "Outbound qualify call for a lead flagged by AI roof analysis. Greets the homeowner, checks interest, offers appointment times, confirms, and escalates to a live transfer if the caller is distressed, confused, or asks for a human. Import into Bland's Pathway editor (bland.ai dashboard -> Pathways -> Import) and adjust prompts/voice to taste, then set the resulting pathway ID as BLAND_QUALIFY_PATHWAY_ID.",
+  "nodes": [
+    {
+      "id": "greeting",
+      "type": "Default",
+      "data": {
+        "name": "Greeting",
+        "text": "Hi, this is {{agent_name}} calling on behalf of AeroLeadAI about {{address}} — our records show your roof may have some storm-related wear worth a quick look. Do you have a minute?",
+        "isStart": true
+      }
+    },
+    {
+      "id": "qualify_interest",
+      "type": "Default",
+      "data": {
+        "name": "Qualify interest",
+        "text": "Great — we'd like to send someone out for a free inspection to confirm what our imagery flagged and give you a real quote. Would you be open to scheduling a time this week?"
+      }
+    },
+    {
+      "id": "not_interested",
+      "type": "End Call",
+      "data": {
+        "name": "Not interested",
+        "text": "No problem at all, thanks for your time. Have a great day.",
+        "endCallReason": "declined"
+      }
+    },
+    {
+      "id": "offer_times",
+      "type": "Default",
+      "data": {
+        "name": "Offer appointment times",
+        "text": "Perfect. I have availability {{proposed_time_1}} or {{proposed_time_2}} — which works better for you?"
+      }
+    },
+    {
+      "id": "confirm",
+      "type": "Default",
+      "data": {
+        "name": "Confirm appointment",
+        "text": "Got it, I've got you down for {{confirmed_time}} at {{address}}. You'll get a text confirmation shortly. Anything else I can help with?",
+        "extractVars": [
+          ["consent", "boolean", "Did the homeowner clearly agree to the inspection appointment?"],
+          ["requested_time", "string", "The appointment date/time the homeowner confirmed, in ISO 8601 if possible"]
+        ]
+      }
+    },
+    {
+      "id": "escalate_human",
+      "type": "Transfer Call",
+      "data": {
+        "name": "Escalate to human",
+        "text": "I want to make sure you get exactly the help you need — let me connect you with a member of our team right now.",
+        "transferNumber": "{{live_transfer_number}}"
+      }
+    },
+    {
+      "id": "end_call",
+      "type": "End Call",
+      "data": {
+        "name": "Wrap up",
+        "text": "Thanks so much, talk soon.",
+        "endCallReason": "completed"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "greeting", "target": "qualify_interest", "label": "Homeowner confirms it's a good time" },
+    { "id": "e2", "source": "greeting", "target": "escalate_human", "label": "Caller sounds distressed, confused, or asks for a human" },
+    { "id": "e3", "source": "qualify_interest", "target": "offer_times", "label": "Homeowner is interested" },
+    { "id": "e4", "source": "qualify_interest", "target": "not_interested", "label": "Homeowner declines" },
+    { "id": "e5", "source": "qualify_interest", "target": "escalate_human", "label": "Caller sounds distressed, confused, or asks for a human" },
+    { "id": "e6", "source": "offer_times", "target": "confirm", "label": "Homeowner picks a time" },
+    { "id": "e7", "source": "offer_times", "target": "escalate_human", "label": "Caller sounds distressed, confused, or asks for a human" },
+    { "id": "e8", "source": "confirm", "target": "end_call", "label": "Confirmation acknowledged" },
+    { "id": "e9", "source": "escalate_human", "target": "end_call", "label": "Transfer initiated" }
+  ],
+  "webhook": {
+    "note": "Configure this pathway's post-call webhook (Pathway settings -> Webhook) to POST to {APP_BASE_URL}/api/bland/webhook, with a custom header X-Bland-Webhook-Secret set to your BLAND_WEBHOOK_SECRET value.",
+    "expected_variables": ["consent", "requested_time"]
+  }
+}
