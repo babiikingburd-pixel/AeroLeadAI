@@ -1,5 +1,4 @@
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'db_helper.dart';
 
 /// A single project Relay knows about (TapMe, AeroLead, Dial-A-Trade, etc).
 class ProjectMemory {
@@ -33,10 +32,11 @@ class ConversationMemory {
 }
 
 /// The full memory store: profile, projects, goals, and recent conversation
-/// history. Everything lives in shared_preferences (local to the device).
-/// This is what turns Relay from "starts at zero every time" into
-/// something that knows what you're working on.
+/// history. Everything lives in the on-device SQLite DB (via DBHelper),
+/// scoped by workspaceId. This is what turns Relay from "starts at zero
+/// every time" into something that knows what you're working on.
 class MemoryStore {
+  final String workspaceId;
   String currentFocus;
   List<ProjectMemory> projects;
   List<String> goals;
@@ -45,6 +45,7 @@ class MemoryStore {
   static const _maxConversationsKept = 20; // cap so context doesn't grow forever
 
   MemoryStore({
+    this.workspaceId = '',
     this.currentFocus = '',
     List<ProjectMemory>? projects,
     List<String>? goals,
@@ -53,38 +54,71 @@ class MemoryStore {
         goals = goals ?? [],
         recentConversations = recentConversations ?? [];
 
-  static Future<MemoryStore> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('memory_store');
-    if (raw == null) return MemoryStore();
-    final j = jsonDecode(raw);
+  static Future<MemoryStore> load(String workspaceId) async {
+    final currentFocus = await DBHelper.getCurrentFocus(workspaceId) ?? '';
+    final projectRows = await DBHelper.getProjects(workspaceId);
+    final goals = await DBHelper.getGoals(workspaceId);
+    final convoRows = await DBHelper.getRecentConversations(workspaceId);
+
     return MemoryStore(
-      currentFocus: j['currentFocus'] ?? '',
-      projects: (j['projects'] as List? ?? []).map((p) => ProjectMemory.fromJson(p)).toList(),
-      goals: List<String>.from(j['goals'] ?? []),
-      recentConversations: (j['recentConversations'] as List? ?? [])
-          .map((c) => ConversationMemory.fromJson(c))
+      workspaceId: workspaceId,
+      currentFocus: currentFocus,
+      projects: projectRows
+          .map((p) => ProjectMemory(
+                name: p['name'] as String,
+                status: p['status'] as String,
+                notes: p['notes'] as String,
+              ))
           .toList(),
+      goals: goals,
+      // Rows are role+content pairs (user, then assistant), newest-first.
+      // Reverse to chronological order and walk in twos to rebuild exchanges.
+      recentConversations: _pairConversationRows(convoRows),
     );
   }
 
+  static List<ConversationMemory> _pairConversationRows(List<Map<String, dynamic>> rows) {
+    final chronological = rows.reversed.toList();
+    final result = <ConversationMemory>[];
+    for (var i = 0; i + 1 < chronological.length; i += 2) {
+      final userRow = chronological[i];
+      final assistantRow = chronological[i + 1];
+      result.add(ConversationMemory(
+        prompt: userRow['content'] as String,
+        finalAnswer: assistantRow['content'] as String,
+        timestamp: DateTime.fromMillisecondsSinceEpoch((assistantRow['created_at'] as int) * 1000),
+      ));
+    }
+    return result;
+  }
+
   Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'memory_store',
-      jsonEncode({
-        'currentFocus': currentFocus,
-        'projects': projects.map((p) => p.toJson()).toList(),
-        'goals': goals,
-        'recentConversations': recentConversations.map((c) => c.toJson()).toList(),
-      }),
+    await DBHelper.setCurrentFocus(workspaceId, currentFocus);
+    await DBHelper.replaceProjects(
+      workspaceId,
+      projects.map((p) => {'name': p.name, 'status': p.status, 'notes': p.notes}).toList(),
     );
+    await DBHelper.replaceGoals(workspaceId, goals);
+    // recentConversations are persisted incrementally by addConversation(),
+    // not bulk-replaced here -- DBHelper.saveConversation() already caps
+    // the table at 20 rows per workspace on insert (10 exchanges, since
+    // each exchange is 2 rows -- see addConversation below).
   }
 
   void addConversation(String prompt, String finalAnswer) {
     recentConversations.add(ConversationMemory(prompt: prompt, finalAnswer: finalAnswer, timestamp: DateTime.now()));
     if (recentConversations.length > _maxConversationsKept) {
       recentConversations = recentConversations.sublist(recentConversations.length - _maxConversationsKept);
+    }
+    if (workspaceId.isNotEmpty) {
+      // Fire-and-forget: keeps this method synchronous/void like before,
+      // so call sites (e.g. main.dart) don't need to change. Stored as two
+      // rows (user prompt, assistant answer) to match the conversations
+      // table's role+content shape, which local_server.dart's /messages
+      // endpoint also writes to.
+      DBHelper.saveConversation(workspaceId, 'user', prompt).then((_) {
+        DBHelper.saveConversation(workspaceId, 'assistant', finalAnswer);
+      });
     }
   }
 
