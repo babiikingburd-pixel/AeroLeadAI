@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'db_helper.dart';
 import 'memory_store.dart';
 
 /// One agent role assigned within a workspace (#2/#8 combined).
@@ -78,8 +78,7 @@ class WorkspaceManager {
   WorkspaceManager({List<Workspace>? workspaces}) : workspaces = workspaces ?? [];
 
   static Future<WorkspaceManager> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('workspaces');
+    final raw = await DBHelper.getSetting('workspaces');
     if (raw == null) {
       // First run: seed with your known ventures so it's not empty on day one.
       final seeded = WorkspaceManager(workspaces: [
@@ -95,8 +94,7 @@ class WorkspaceManager {
   }
 
   Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('workspaces', jsonEncode(workspaces.map((w) => w.toJson()).toList()));
+    await DBHelper.setSetting('workspaces', jsonEncode(workspaces.map((w) => w.toJson()).toList()));
   }
 
   Workspace? byId(String id) {
