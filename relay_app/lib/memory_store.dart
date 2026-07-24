@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'db_helper.dart';
 
 /// A single project Relay knows about (TapMe, AeroLead, Dial-A-Trade, etc).
 class ProjectMemory {
@@ -54,8 +54,7 @@ class MemoryStore {
         recentConversations = recentConversations ?? [];
 
   static Future<MemoryStore> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('memory_store');
+    final raw = await DBHelper.getSetting('memory_store');
     if (raw == null) return MemoryStore();
     final j = jsonDecode(raw);
     return MemoryStore(
@@ -69,8 +68,7 @@ class MemoryStore {
   }
 
   Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+    await DBHelper.setSetting(
       'memory_store',
       jsonEncode({
         'currentFocus': currentFocus,

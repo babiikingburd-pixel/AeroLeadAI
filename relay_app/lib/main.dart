@@ -6,8 +6,11 @@ import 'workspace_state.dart';
 import 'skill_registry.dart';
 import 'deployment_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'local_server.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await LocalServer.start();
   runApp(const RelayApp());
 }
 
