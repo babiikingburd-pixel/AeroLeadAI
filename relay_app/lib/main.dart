@@ -101,7 +101,9 @@ class _WorkspaceCardState extends State<_WorkspaceCard> {
   WorkspaceState _state = WorkspaceState();
   bool _expanded = false;
   bool _loading = false;
+  bool _deploying = false;
   String? _lastOutput;
+  String? _lastWebsiteHtml;
   final _promptController = TextEditingController();
 
   @override
@@ -135,6 +137,7 @@ class _WorkspaceCardState extends State<_WorkspaceCard> {
         case 'buildWebsite':
           final result = await skills.buildWebsite(prompt, contextBlock: contextBlock);
           output = result.finalAnswer;
+          _lastWebsiteHtml = output;
           break;
         case 'writeCopy':
           output = await skills.writeCopy(prompt, contextBlock: contextBlock);
@@ -151,6 +154,57 @@ class _WorkspaceCardState extends State<_WorkspaceCard> {
       setState(() => _lastOutput = 'Error: $e');
     } finally {
       setState(() => _loading = false);
+    }
+  }
+
+  /// Deploy: pushes the last built website to a new GitHub repo, then
+  /// triggers a Vercel deployment from that repo. Requires the GitHub
+  /// and Vercel tokens to already be saved on this device via Settings.
+  Future<void> _deploy() async {
+    final html = _lastWebsiteHtml;
+    if (html == null) return;
+
+    final repoName = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final controller = TextEditingController(text: '${widget.workspace.id}-site');
+        return AlertDialog(
+          title: const Text('Deploy to GitHub + Vercel'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(labelText: 'Repo / project name'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: const Text('Deploy'),
+            ),
+          ],
+        );
+      },
+    );
+    if (repoName == null || repoName.isEmpty) return;
+
+    setState(() => _deploying = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final deploy = DeploymentService(
+        githubToken: prefs.getString('github_token'),
+        vercelToken: prefs.getString('vercel_token'),
+      );
+      final repoUrl = await deploy.createGithubRepo(repoName, {'index.html': html});
+      final segments = Uri.parse(repoUrl).pathSegments;
+      final fullName = segments.length >= 2 ? '${segments[0]}/${segments[1]}' : repoName;
+      final liveUrl = await deploy.deployToVercel(repoName, fullName);
+      setState(() {
+        _state.deploymentStatus = 'live';
+        _lastOutput = 'Deployed.\nRepo: $repoUrl\nLive: $liveUrl';
+      });
+    } catch (e) {
+      setState(() => _lastOutput = 'Deploy failed: $e');
+    } finally {
+      setState(() => _deploying = false);
     }
   }
 
@@ -204,9 +258,22 @@ class _WorkspaceCardState extends State<_WorkspaceCard> {
                     onPressed: _loading ? null : () => _runSkill('writeCopy'),
                     child: const Text('Write Copy'),
                   ),
+                  ElevatedButton(
+                    onPressed: (_deploying || _lastWebsiteHtml == null) ? null : _deploy,
+                    child: const Text('Deploy'),
+                  ),
                 ],
               ),
-              if (_loading) const Padding(padding: EdgeInsets.all(8), child: LinearProgressIndicator()),
+              if (_lastWebsiteHtml == null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Run "Build Website" first — Deploy pushes its output as index.html.',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ),
+              if (_loading || _deploying)
+                const Padding(padding: EdgeInsets.all(8), child: LinearProgressIndicator()),
               if (_lastOutput != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
