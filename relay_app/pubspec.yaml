@@ -11,6 +11,10 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   shared_preferences: ^2.2.2
+  sqflite: ^2.3.0
+  path: ^1.9.0
+  shelf: ^1.4.1
+  shelf_router: ^1.1.4
 
 dev_dependencies:
   flutter_test:
