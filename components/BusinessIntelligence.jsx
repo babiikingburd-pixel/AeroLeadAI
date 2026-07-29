@@ -4,6 +4,7 @@ import { listJobs, listContractors } from "../lib/opsStore";
 import { importConsoleProperties } from "../lib/leadStore";
 import { demandByZip, revenueForecast, underservedMarkets, contractorPerformance, pricingSignal, suggestDispatch } from "../lib/businessIntelligence";
 import PhaseTwoIntelligencePanel from "./PhaseTwoIntelligencePanel";
+import { supabase, isSupabaseConfigured } from "../lib/supabase";
 
 const SLATE = "#0d1420", PANEL = "#131c2b", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a";
 const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e", RED = "#ef5a6f";
@@ -13,12 +14,54 @@ export default function BusinessIntelligence() {
   const [jobs, setJobs] = useState([]);
   const [contractors, setContractors] = useState([]);
 
+  const [liveLeads, setLiveLeads] = useState([]);
+  const [liveConnected, setLiveConnected] = useState(false);
+
   async function refresh() {
     setLeads(importConsoleProperties());
     setJobs(await listJobs());
     setContractors(await listContractors());
   }
   useEffect(() => { refresh(); }, []);
+
+  // Live scan feed: real-time INSERTs on the Supabase `leads` table (fed by
+  // /api/scan/continuous and /api/scan/storm), falling back to polling
+  // /api/leads every 30s when Supabase realtime isn't reachable/configured.
+  useEffect(() => {
+    let pollId;
+
+    async function pollLeads() {
+      try {
+        const res = await fetch("/api/leads?limit=20");
+        const data = await res.json();
+        if (data.success) setLiveLeads(data.leads);
+      } catch {}
+    }
+
+    if (!isSupabaseConfigured || !supabase) {
+      pollLeads();
+      pollId = setInterval(pollLeads, 30000);
+      return () => clearInterval(pollId);
+    }
+
+    pollLeads();
+    const channel = supabase
+      .channel("leads-feed")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "leads" }, (payload) => {
+        setLiveLeads((prev) => [payload.new, ...prev].slice(0, 20));
+      })
+      .subscribe((status) => {
+        const connected = status === "SUBSCRIBED";
+        setLiveConnected(connected);
+        if (!connected && !pollId) pollId = setInterval(pollLeads, 30000);
+        if (connected && pollId) { clearInterval(pollId); pollId = null; }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+      if (pollId) clearInterval(pollId);
+    };
+  }, []);
 
   const demand = demandByZip(leads);
   const forecast = revenueForecast(jobs);
@@ -38,6 +81,27 @@ export default function BusinessIntelligence() {
           </p>
         </div>
         <button onClick={refresh} style={{ padding: "8px 14px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: GREEN, cursor: "pointer", fontSize: 13 }}>↻ Refresh</button>
+      </div>
+
+      <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16, marginBottom: 16, maxHeight: 220, overflowY: "auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: liveConnected ? GREEN : MUTE,
+            boxShadow: liveConnected ? `0 0 0 0 ${GREEN}` : "none",
+            animation: liveConnected ? "aerolead-pulse 1.6s infinite" : "none",
+          }} />
+          <div style={{ fontSize: 11, color: AMBER, fontFamily: "monospace" }}>LIVE SCAN FEED ({liveLeads.length})</div>
+          <span style={{ fontSize: 11, color: MUTE }}>{liveConnected ? "realtime connected" : "polling every 30s"}</span>
+        </div>
+        <style>{`@keyframes aerolead-pulse { 0% { box-shadow: 0 0 0 0 rgba(79,201,142,0.6); } 70% { box-shadow: 0 0 0 6px rgba(79,201,142,0); } 100% { box-shadow: 0 0 0 0 rgba(79,201,142,0); } }`}</style>
+        {liveLeads.length === 0 && <div style={{ fontSize: 12, color: MUTE }}>No scanned leads yet — run a scan from the Maintenance Console.</div>}
+        {liveLeads.map((l) => (
+          <div key={l.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 0", borderTop: `1px solid ${LINE}` }}>
+            <span>{l.address}</span>
+            <span style={{ color: MUTE }}>{l.urgency ? `${l.urgency} urgency` : ""}{l.est_value ? ` · ${l.est_value}` : ""}</span>
+          </div>
+        ))}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
