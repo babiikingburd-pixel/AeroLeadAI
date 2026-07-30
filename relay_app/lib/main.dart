@@ -5,9 +5,18 @@ import 'workspace.dart';
 import 'workspace_state.dart';
 import 'skill_registry.dart';
 import 'deployment_service.dart';
+import 'local_server.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await LocalServer.start();
+  } catch (e) {
+    // Don't let a local-server failure (e.g. port already in use) block
+    // the app from launching.
+    debugPrint('LocalServer failed to start: $e');
+  }
   runApp(const RelayApp());
 }
 

@@ -1,5 +1,4 @@
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'db_helper.dart';
 import 'memory_store.dart';
 
 /// One agent role assigned within a workspace (#2/#8 combined).
@@ -44,6 +43,11 @@ class Workspace {
         ),
       ];
 
+  // NOTE: agent_roles in the SQLite schema only stores role_name + active
+  // (no instructionTemplate column), so agent roles are not DB-persisted --
+  // they stay as in-memory defaults, same as before this migration. There
+  // was never a UI to edit them, so this preserves current behavior exactly.
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
@@ -60,6 +64,7 @@ class Workspace {
         id: j['id'],
         name: j['name'],
         memory: MemoryStore(
+          workspaceId: j['id'],
           currentFocus: j['memory']['currentFocus'] ?? '',
           projects: (j['memory']['projects'] as List? ?? []).map((p) => ProjectMemory.fromJson(p)).toList(),
           goals: List<String>.from(j['memory']['goals'] ?? []),
@@ -71,32 +76,32 @@ class Workspace {
       );
 }
 
-/// Manages the full list of workspaces, persisted locally.
+/// Manages the full list of workspaces, persisted locally via SQLite
+/// (DBHelper) instead of SharedPreferences.
 class WorkspaceManager {
   List<Workspace> workspaces;
 
   WorkspaceManager({List<Workspace>? workspaces}) : workspaces = workspaces ?? [];
 
   static Future<WorkspaceManager> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('workspaces');
-    if (raw == null) {
-      // First run: seed with your known ventures so it's not empty on day one.
-      final seeded = WorkspaceManager(workspaces: [
-        Workspace(id: 'tapme', name: 'TapMe / 2UNE TAGS', memory: MemoryStore()),
-        Workspace(id: 'aerolead', name: 'AeroLead AI', memory: MemoryStore()),
-        Workspace(id: 'dialatrade', name: 'Dial-A-Trade', memory: MemoryStore()),
-      ]);
-      await seeded.save();
-      return seeded;
+    // The workspaces table is seeded with TapMe / AeroLead AI / Dial-A-Trade
+    // by db_helper.dart's onCreate, so this always has rows -- no more
+    // "seed on first run" special-casing needed like the old prefs version.
+    final rows = await DBHelper.getWorkspaces();
+    final workspaces = <Workspace>[];
+    for (final row in rows) {
+      final id = row['id'] as String;
+      final name = row['name'] as String;
+      final memory = await MemoryStore.load(id);
+      workspaces.add(Workspace(id: id, name: name, memory: memory));
     }
-    final list = jsonDecode(raw) as List;
-    return WorkspaceManager(workspaces: list.map((w) => Workspace.fromJson(w)).toList());
+    return WorkspaceManager(workspaces: workspaces);
   }
 
   Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('workspaces', jsonEncode(workspaces.map((w) => w.toJson()).toList()));
+    for (final ws in workspaces) {
+      await ws.memory.save();
+    }
   }
 
   Workspace? byId(String id) {
