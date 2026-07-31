@@ -32,10 +32,39 @@ export default function LeadMap() {
   const [selected, setSelected] = useState(null);
   const [mapReady, setMapReady] = useState(false);
   const [stats, setStats] = useState({});
+  const [batchMeta, setBatchMeta] = useState({ total: 0, shown: 0, truncated: false, ok: true });
 
-  const refreshItems = useCallback(() => {
-    const leads = importConsoleProperties();
-    const withCoords = leads.filter((it) => it.lat && it.lon);
+  const refreshItems = useCallback(async () => {
+    const localLeads = importConsoleProperties();
+
+    let batchLeads = [];
+    try {
+      const res = await fetch("/api/map-leads");
+      const data = await res.json();
+      if (data.ok) {
+        batchLeads = data.leads.map((row) => ({
+          address: row.address,
+          lat: row.lat,
+          lon: row.lon,
+          findingsScore: row.roof_score ?? null, // roof-focused score, matches importConsoleProperties()'s convention
+          lowPriority: row.permit_within_10y || false,
+          source: "batch_leads",
+        }));
+        setBatchMeta({ total: data.total, shown: batchLeads.length, truncated: data.truncated, ok: true });
+      } else {
+        setBatchMeta({ total: 0, shown: 0, truncated: false, ok: false, error: data.error });
+      }
+    } catch (e) {
+      setBatchMeta({ total: 0, shown: 0, truncated: false, ok: false, error: e.message });
+    }
+
+    // Merge, deduped by address — local console scans (fresher, this browser
+    // session) win over the batch_leads snapshot for the same address.
+    const byAddress = new Map();
+    batchLeads.forEach((it) => it.address && byAddress.set(it.address.toLowerCase(), it));
+    localLeads.forEach((it) => it.address && byAddress.set(it.address.toLowerCase(), it));
+
+    const withCoords = [...byAddress.values()].filter((it) => it.lat && it.lon);
     setItems(withCoords);
     const s = {};
     withCoords.forEach((it) => { const t = tierOf(it); s[t] = (s[t] || 0) + 1; });
@@ -174,6 +203,11 @@ export default function LeadMap() {
         <div>
           <div style={{ fontSize: 11, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI</div>
           <h1 style={{ fontSize: 20, margin: "4px 0 0" }}>Interactive Damage Intelligence Map</h1>
+          <p style={{ fontSize: 11.5, color: MUTE, margin: "4px 0 0" }}>
+            {batchMeta.ok
+              ? `${batchMeta.shown.toLocaleString()} of ${batchMeta.total.toLocaleString()} batch_leads with coordinates${batchMeta.truncated ? " (capped for map performance)" : ""}`
+              : `batch_leads unavailable: ${batchMeta.error || "not configured"} — showing local scans only`}
+          </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <a href="/discovery" style={{ padding: "7px 14px", border: `1px solid ${LINE}`, borderRadius: 6, color: BLUE, fontSize: 13, textDecoration: "none" }}>+ Discover properties</a>
