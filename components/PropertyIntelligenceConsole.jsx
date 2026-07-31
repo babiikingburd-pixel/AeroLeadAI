@@ -3,6 +3,8 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import supabase from "../lib/supabaseClient";
 import AutoLocate from "./AutoLocate";
 import { upsertLead } from "../lib/leadStore";
+import InstrumentTile from "./InstrumentTile";
+import { HUD } from "../lib/hudTheme";
 
 // ============================================================================
 // AeroLeadAI — Property Intelligence Mission Control (DEPLOYABLE VERSION)
@@ -287,6 +289,14 @@ export default function PropertyIntelligenceConsole() {
 
   const fileRefs = { roof: useRef(null), tree: useRef(null), driveway: useRef(null) };
   const recognitionRef = useRef(null);
+
+  // Instrument-stack UI state for the image intake tiles — which one is
+  // "active" (full-size, front of stack) and which have been explicitly
+  // retracted (removed from the stack). Minimizing (not active) only dims
+  // the tile; retracting is the one action that actually removes it. Neither
+  // touches the underlying uploaded image data.
+  const [activeImageId, setActiveImageId] = useState(null);
+  const [retractedImageIds, setRetractedImageIds] = useState(new Set());
 
   // Advanced settings
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -1155,15 +1165,35 @@ export default function PropertyIntelligenceConsole() {
                     </div>
                   ))}
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-                  {current.folders.images.map((im) => (
-                    <div key={im.id} onClick={() => { setEnhanceTarget({ folder: "images", imageId: im.id }); setEnhancePreview(null); }} style={{ cursor: "pointer" }} title="Click to zoom / edit / enhance">
-                      <img src={im.dataUrl} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: im.enhanced ? `2px solid ${GREEN}` : "none" }} />
-                      <div style={{ fontSize: 9, color: im.enhanced ? GREEN : MUTE, textAlign: "center" }}>{DOMAIN_LABELS[im.domain]}{im.enhanced ? " ✦" : ""}</div>
-                    </div>
-                  ))}
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                  {current.folders.images.filter((im) => !retractedImageIds.has(im.id)).map((im) => {
+                    const isActive = activeImageId ? activeImageId === im.id : current.folders.images[0]?.id === im.id;
+                    return (
+                      <InstrumentTile
+                        key={im.id}
+                        tag={`${DOMAIN_LABELS[im.domain]}${im.enhanced ? " ✦" : ""}`}
+                        src={im.dataUrl}
+                        active={isActive}
+                        onActivate={() => {
+                          if (isActive) { setEnhanceTarget({ folder: "images", imageId: im.id }); setEnhancePreview(null); }
+                          else setActiveImageId(im.id);
+                        }}
+                        onRetract={() => setRetractedImageIds((prev) => new Set(prev).add(im.id))}
+                        width={isActive ? 220 : 130}
+                        height={isActive ? 170 : 130}
+                      />
+                    );
+                  })}
                   {current.folders.images.length === 0 && <div style={{ fontSize: 12, color: MUTE }}>No images yet — agents will request them when you run a scan.</div>}
                 </div>
+                {retractedImageIds.size > 0 && (
+                  <button
+                    onClick={() => setRetractedImageIds(new Set())}
+                    style={{ marginTop: 8, background: "none", border: "none", color: HUD.muted, fontSize: 11, cursor: "pointer", textDecoration: "underline" }}
+                  >
+                    Restore {retractedImageIds.size} retracted image{retractedImageIds.size > 1 ? "s" : ""}
+                  </button>
+                )}
               </div>
 
               {Object.keys(angleReview).length > 0 && (

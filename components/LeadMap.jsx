@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { loadLeads, importConsoleProperties } from "../lib/leadStore";
 import LeadDetailDrawer from "./LeadDetailDrawer";
+import { fireDetectionToast } from "../lib/detectionToast";
 
 const SLATE = "#0d1420", PANEL = "#131c2b", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a";
 const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e";
@@ -33,6 +34,7 @@ export default function LeadMap() {
   const [mapReady, setMapReady] = useState(false);
   const [stats, setStats] = useState({});
   const [batchMeta, setBatchMeta] = useState({ total: 0, shown: 0, truncated: false, ok: true });
+  const seenAddressesRef = useRef(null); // null until the first refresh completes, so we never toast on initial load
 
   const refreshItems = useCallback(async () => {
     const localLeads = importConsoleProperties();
@@ -69,6 +71,15 @@ export default function LeadMap() {
     const s = {};
     withCoords.forEach((it) => { const t = tierOf(it); s[t] = (s[t] || 0) + 1; });
     setStats(s);
+
+    // Detection toast: only for hot-tier leads that weren't present on the
+    // previous refresh (never on first load — that would fire once for
+    // every pre-existing hot lead already in the dataset).
+    if (seenAddressesRef.current) {
+      const newHot = withCoords.find((it) => tierOf(it) === "hot" && it.address && !seenAddressesRef.current.has(it.address.toLowerCase()));
+      if (newHot) fireDetectionToast({ title: newHot.address, subtitle: `Threat ${newHot.findingsScore} · hot lead` });
+    }
+    seenAddressesRef.current = new Set(withCoords.filter((it) => it.address).map((it) => it.address.toLowerCase()));
   }, []);
 
   useEffect(() => { refreshItems(); }, [refreshItems]);

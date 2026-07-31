@@ -5,6 +5,7 @@ import { importConsoleProperties } from "../lib/leadStore";
 import { demandByZip, revenueForecast, underservedMarkets, contractorPerformance, pricingSignal, suggestDispatch } from "../lib/businessIntelligence";
 import PhaseTwoIntelligencePanel from "./PhaseTwoIntelligencePanel";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
+import { fireDetectionToast } from "../lib/detectionToast";
 
 const SLATE = "#0d1420", PANEL = "#131c2b", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a";
 const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e", RED = "#ef5a6f";
@@ -49,6 +50,9 @@ export default function BusinessIntelligence() {
       .channel("leads-feed")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "leads" }, (payload) => {
         setLiveLeads((prev) => [payload.new, ...prev].slice(0, 20));
+        if (payload.new.urgency === "high") {
+          fireDetectionToast({ title: payload.new.address, subtitle: `${payload.new.urgency} urgency${payload.new.est_value ? ` · ${payload.new.est_value}` : ""}` });
+        }
       })
       .subscribe((status) => {
         const connected = status === "SUBSCRIBED";

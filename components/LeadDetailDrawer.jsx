@@ -7,6 +7,9 @@ import ReportGenerator from "./ReportGenerator";
 import SalesIntelligencePanel from "./SalesIntelligencePanel";
 import ImageryCompare from "./ImageryCompare";
 import PropertyProfilePanel from "./PropertyProfilePanel";
+import ThreatMeter from "./ThreatMeter";
+import TargetReticle from "./TargetReticle";
+import { HUD } from "../lib/hudTheme";
 
 const AMBER = "#f5a623", PANEL = "#141b26", LINE = "#232f3e", MUTE = "#6b7c93", GREEN = "#4caf7d", BLUE = "#2e7dd1";
 const TABS = ["Overview", "Profile", "Notes", "Tasks", "Calendar", "Communications", "Imagery", "Report", "Scoring"];
@@ -39,13 +42,20 @@ export default function LeadDetailDrawer({ lead, onClose, onChange }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", justifyContent: "flex-end" }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)", height: "100%", background: "#0b0f16", overflowY: "auto", padding: 20, color: "#dfe6ee", fontFamily: "Inter, system-ui, sans-serif" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 11, fontFamily: "monospace", color: AMBER }}>LEAD DETAIL</div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>{lead.address}</div>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)", height: "100%", background: HUD.bg, overflowY: "auto", padding: 20, color: "#dfe6ee", fontFamily: HUD.fontMono }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 16, gap: 16 }}>
+          <div style={{ display: "flex", gap: 16, alignItems: "center", minWidth: 0 }}>
+            <TargetReticle label="LOCKED" size={64} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontFamily: HUD.fontMono, color: HUD.cyan, letterSpacing: "0.08em" }}>TARGET LOCK</div>
+              <div style={{ fontFamily: HUD.fontDisplay, fontSize: 16, fontWeight: 700, wordBreak: "break-word" }}>{lead.address}</div>
+            </div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: MUTE, fontSize: 20, cursor: "pointer" }}>×</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: MUTE, fontSize: 20, cursor: "pointer", flexShrink: 0 }}>×</button>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <ThreatMeter score={lead.findingsScore ?? null} />
         </div>
 
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14, borderBottom: `1px solid ${LINE}`, paddingBottom: 10 }}>
