@@ -1,0 +1,20 @@
+{
+  "crons": [
+    {
+      "path": "/api/heartbeat",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/tier-medium",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/tier-low",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/lesson-engine",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}
