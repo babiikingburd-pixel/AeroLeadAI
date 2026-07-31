@@ -1,5 +1,5 @@
 import AuthGate from "../components/AuthGate";
-import ConditionalTopNav from "../components/ConditionalTopNav";
+import TacticalShell from "../components/TacticalShell";
 
 export const metadata = {
   title: "AeroLeadAI Property Intelligence",
@@ -9,10 +9,16 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, background: "#0b0f16" }}>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body style={{ margin: 0, background: "#03050a" }}>
         <AuthGate>
-          <ConditionalTopNav />
-          {children}
+          <TacticalShell>{children}</TacticalShell>
         </AuthGate>
       </body>
     </html>
