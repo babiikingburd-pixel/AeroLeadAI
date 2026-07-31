@@ -51,13 +51,13 @@ async function runScientistAgent(candidates) {
       : 0;
 
     const existingRes = await supabaseGet(
-      `experiments?lesson_type=eq.${candidate.lesson_type}&domain=${candidate.domain ? `eq.${candidate.domain}` : "is.null"}&status=eq.testing&order=started_at.desc&limit=1`
+      `lesson_experiments?lesson_type=eq.${candidate.lesson_type}&domain=${candidate.domain ? `eq.${candidate.domain}` : "is.null"}&status=eq.testing&order=started_at.desc&limit=1`
     );
     const existing = existingRes.ok && existingRes.data?.[0];
 
     if (!existing) {
       // First sighting — open a new experiment, do NOT write to learned_lessons yet.
-      const insertRes = await supabasePost("experiments", [{
+      const insertRes = await supabasePost("lesson_experiments", [{
         hypothesis: candidate.lesson, lesson_type: candidate.lesson_type, domain: candidate.domain,
         initial_evidence_count: candidate.evidence_count, current_evidence_count: candidate.evidence_count,
         initial_effect_size: effectSize, current_effect_size: effectSize,
@@ -84,14 +84,14 @@ async function runScientistAgent(candidates) {
         supporting_correction_ids: candidate.supporting_correction_ids || [],
       }]);
       const lessonId = lessonRes.ok && lessonRes.data?.[0]?.lesson_id;
-      await supabasePatch(`experiments?experiment_id=eq.${existing.experiment_id}`, {
+      await supabasePatch(`lesson_experiments?experiment_id=eq.${existing.experiment_id}`, {
         status: "confirmed", current_evidence_count: candidate.evidence_count, current_effect_size: effectSize,
         check_count: (existing.check_count || 1) + 1, resolved_at: new Date().toISOString(), promoted_lesson_id: lessonId || null,
       });
       outcomes.confirmed++;
     } else {
       // Refuted — the pattern didn't hold up under more data. Stop tracking it.
-      await supabasePatch(`experiments?experiment_id=eq.${existing.experiment_id}`, {
+      await supabasePatch(`lesson_experiments?experiment_id=eq.${existing.experiment_id}`, {
         status: "refuted", current_evidence_count: candidate.evidence_count, current_effect_size: effectSize,
         check_count: (existing.check_count || 1) + 1, resolved_at: new Date().toISOString(),
       });

@@ -30,7 +30,7 @@ async function whatDidILearnToday() {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const [lessonsRes, experimentsRes] = await Promise.all([
     supabaseGet(`learned_lessons?created_at=gte.${since}&select=lesson,evidence_count,confidence`),
-    supabaseGet(`experiments?resolved_at=gte.${since}&status=eq.confirmed&select=hypothesis,current_effect_size`),
+    supabaseGet(`lesson_experiments?resolved_at=gte.${since}&status=eq.confirmed&select=hypothesis,current_effect_size`),
   ]);
   return {
     newLessons: lessonsRes.ok ? lessonsRes.data : [],
@@ -63,7 +63,7 @@ async function bestStrategyProxy() {
 }
 
 async function nextExperiment() {
-  const res = await supabaseGet("experiments?status=eq.testing&select=*&order=started_at.asc&limit=5");
+  const res = await supabaseGet("lesson_experiments?status=eq.testing&select=*&order=started_at.asc&limit=5");
   if (!res.ok) return { notes: "Could not fetch experiments." };
   if (!res.data.length) return { notes: "No open experiments — the lesson engine hasn't found a new borderline pattern to test since the last one resolved." };
   return { openExperiments: res.data, notes: `${res.data.length} hypothesis(es) currently being re-measured, oldest listed first.` };
