@@ -2,11 +2,11 @@
   "crons": [
     {
       "path": "/api/heartbeat",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/tier-medium",
-      "schedule": "0 */6 * * *"
+      "schedule": "0 12 * * *"
     },
     {
       "path": "/api/tier-low",
