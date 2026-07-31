@@ -7,10 +7,15 @@ import { supabaseServer } from "../../../lib/supabaseServer";
 // instead of the real scanned dataset. This route is the fix: a real query
 // against batch_leads, paginated past PostgREST's default 1000-row cap.
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 const PAGE_SIZE = 1000;
-const MAX_ROWS = 5000; // render cap — Mapbox clustering handles this fine; a hard multiple of PAGE_SIZE keeps pagination math simple
+// Safety ceiling only, not a display cap — every geocoded lead must show on
+// the map regardless of tier (hot/cold/low-priority/unscored all matter for
+// coverage), so this isn't allowed to silently truncate the real dataset.
+// The loop below stops naturally once a page comes back short; this just
+// bounds worst-case pagination if the table were ever unexpectedly huge.
+const MAX_ROWS = 50000;
 
 export async function GET() {
   const supabase = supabaseServer();
