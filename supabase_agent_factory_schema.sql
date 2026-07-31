@@ -50,7 +50,11 @@ create table if not exists agent_specs (
   generation int default 1,
   parent_agent_id uuid references agent_specs(agent_id),
   created_at timestamptz default now(),
-  expires_at timestamptz generated always as (created_at + (lifetime_hours || ' hours')::interval) stored,
+  -- Plain column, not generated: `timestamptz + interval` isn't immutable
+  -- (Postgres rejects it in a stored generated column since the result
+  -- depends on the session timezone), so the app computes and sets this
+  -- explicitly at insert time (see lib/agentFactory.js create()).
+  expires_at timestamptz,
   retired_at timestamptz,
   retired_reason text
 );

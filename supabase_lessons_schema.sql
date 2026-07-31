@@ -56,7 +56,11 @@ end $$;
 -- what makes "runs experiments, tracks success rates" real instead of a
 -- single-measurement guess dressed up as science.
 -- =========================================================================
-create table if not exists experiments (
+-- Named lesson_experiments, not experiments: this database already has an
+-- unrelated A/B-testing "experiments" table (business_id/control/variant
+-- conversion columns). Reusing that name would silently no-op against the
+-- existing table instead of creating this one.
+create table if not exists lesson_experiments (
   experiment_id uuid primary key default gen_random_uuid(),
   hypothesis text not null,
   lesson_type text,
@@ -73,15 +77,15 @@ create table if not exists experiments (
   promoted_lesson_id uuid references learned_lessons(lesson_id)
 );
 
-create index if not exists idx_experiments_status on experiments (status) where status = 'testing';
+create index if not exists idx_lesson_experiments_status on lesson_experiments (status) where status = 'testing';
 
-alter table experiments enable row level security;
+alter table lesson_experiments enable row level security;
 do $$
 begin
-  execute 'drop policy if exists "Allow anon read" on experiments';
-  execute 'create policy "Allow anon read" on experiments for select using (true)';
-  execute 'drop policy if exists "Allow anon insert" on experiments';
-  execute 'create policy "Allow anon insert" on experiments for insert with check (true)';
-  execute 'drop policy if exists "Allow anon update" on experiments';
-  execute 'create policy "Allow anon update" on experiments for update using (true)';
+  execute 'drop policy if exists "Allow anon read" on lesson_experiments';
+  execute 'create policy "Allow anon read" on lesson_experiments for select using (true)';
+  execute 'drop policy if exists "Allow anon insert" on lesson_experiments';
+  execute 'create policy "Allow anon insert" on lesson_experiments for insert with check (true)';
+  execute 'drop policy if exists "Allow anon update" on lesson_experiments';
+  execute 'create policy "Allow anon update" on lesson_experiments for update using (true)';
 end $$;
