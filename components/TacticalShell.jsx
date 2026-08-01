@@ -10,6 +10,7 @@ const MODULES = [
   { href: "/discovery", label: "Discovery" },
   { href: "/batch", label: "Batch / Mass Upload" },
   { href: "/map", label: "Lead Map" },
+  { href: "/twincities", label: "Twin Cities Priority" },
   { href: "/scanner", label: "Background Scanner" },
   { href: "/jobs", label: "Jobs" },
   { href: "/dashboard", label: "Dashboard" },
