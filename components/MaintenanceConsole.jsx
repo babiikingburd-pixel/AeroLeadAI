@@ -1,5 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import SystemHealthMonitor from "./SystemHealthMonitor";
+import ImageReviewQueue from "./ImageReviewQueue";
 
 const SLATE = "#0d1420", PANEL = "#131c2b", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a";
 const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e", RED = "#ef5a6f";
@@ -15,8 +17,6 @@ export default function MaintenanceConsole() {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
 
-  const [health, setHealth] = useState(null);
-  const [loadingHealth, setLoadingHealth] = useState(false);
   const [log, setLog] = useState([]);
 
   const [zip, setZip] = useState("");
@@ -34,24 +34,6 @@ export default function MaintenanceConsole() {
   function pushLog(entry) {
     setLog((l) => [{ id: Math.random().toString(36).slice(2), at: nowStamp(), entry }, ...l].slice(0, 30));
   }
-
-  async function loadHealth() {
-    setLoadingHealth(true);
-    try {
-      const res = await fetch("/api/system-health");
-      const data = await res.json();
-      setHealth(data);
-      pushLog(`Health check: ${data.healthy ? "all systems ok" : "issues detected"}`);
-    } catch (e) {
-      pushLog(`Health check failed: ${e.message}`);
-    } finally {
-      setLoadingHealth(false);
-    }
-  }
-
-  useEffect(() => {
-    if (unlocked) loadHealth();
-  }, [unlocked]);
 
   function tryUnlock() {
     if (code === PASSCODE) {
@@ -138,20 +120,10 @@ export default function MaintenanceConsole() {
           <h1 style={{ fontSize: 22, margin: "4px 0 0" }}>🔧 Maintenance Console</h1>
           <p style={{ color: MUTE, fontSize: 12, margin: "4px 0 0" }}>System health, manual scan triggers, and activity log.</p>
         </div>
-        <button onClick={loadHealth} style={btnStyle(GREEN)}>{loadingHealth ? "Checking…" : "↻ Recheck health"}</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-        <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16 }}>
-          <div style={{ fontSize: 11, color: AMBER, fontFamily: "monospace", marginBottom: 10 }}>SYSTEM HEALTH</div>
-          {!health && <div style={{ fontSize: 12, color: MUTE }}>Loading…</div>}
-          {health?.checks?.map((c) => (
-            <div key={c.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "5px 0", borderTop: `1px solid ${LINE}` }}>
-              <span>{c.ok ? "🟢" : "🔴"} {c.name}</span>
-              <span style={{ color: MUTE, textAlign: "right", maxWidth: 180 }}>{c.detail}</span>
-            </div>
-          ))}
-        </div>
+        <SystemHealthMonitor />
 
         <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16, maxHeight: 280, overflowY: "auto" }}>
           <div style={{ fontSize: 11, color: AMBER, fontFamily: "monospace", marginBottom: 10 }}>ACTIVITY LOG</div>
@@ -162,6 +134,10 @@ export default function MaintenanceConsole() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <ImageReviewQueue />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
