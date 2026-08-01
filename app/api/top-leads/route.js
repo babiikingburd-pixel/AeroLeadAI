@@ -101,7 +101,7 @@ export async function GET(req) {
       windMph: row.wind_mph,
       assessedValue: row.assessed_value,
       reviewStatus: row.review_status,
-      roofEstimateUsd: null, // reserved: wire to propertyIntelligence.js cost calc if/when priced per-lead
+      roofEstimateUsd: row.replacement_cost ?? null, // now sourced from batch_leads.replacement_cost (property_enrichment sync target)
       // Evidence categories not yet columns on batch_leads (heavySnowRegion,
       // treeOverhang, etc.) read from damage_notes if present, else false —
       // never fabricated as true.

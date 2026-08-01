@@ -349,25 +349,23 @@ export default function MassUploadConsole() {
       const roofline = Object.entries(angles).filter(([k]) => k.includes("roofline")).map(([, v]) => v);
       const images = force ? { roof: null, tree: null, driveway: null } : { ...item.images };
 
-      // One imagery-agent call returns several distinct vantage points — assign
-      // the tight parcel crop + roofline street shots to roof, the hybrid
-      // road/label overlay (or wider context shot) to driveway, and the context
-      // shot to tree, instead of discarding everything but one image like before.
-      // Every domain falls back through whatever angle IS available (tight can
-      // fail independently of context under concurrent load on the free Esri
-      // tier — seen in practice — so roof needs the same fallback chain the
-      // other two domains already had, or a flaky tight fetch means roof silently
-      // gets no image while tree/driveway do).
+      // One imagery-agent call returns several distinct vantage points. All
+      // three domains now prefer the tight parcel crop first — a neighborhood-
+      // wide context shot doesn't actually show the tree or driveway any
+      // better than a tight crop does, it just makes both harder to inspect.
+      // Context/hybrid shots stay as fallbacks only, for when tight itself
+      // failed to fetch (can happen independently under concurrent load on
+      // the free Esri tier).
       if (!images.roof) {
         const src = angles.overview_tight || data.dataUrl || angles.overview_context;
         if (src) images.roof = { dataUrl: src, mediaType: "image/jpeg", source: `auto (${data.provider})`, extra: roofline };
       }
       if (!images.driveway) {
-        const src = angles.overview_hybrid_labeled || angles.overview_context || angles.overview_tight || data.dataUrl;
+        const src = angles.overview_tight || angles.overview_hybrid_labeled || angles.overview_context || data.dataUrl;
         if (src) images.driveway = { dataUrl: src, mediaType: "image/jpeg", source: `auto (${data.provider})` };
       }
       if (!images.tree) {
-        const src = angles.overview_context || angles.overview_tight || data.dataUrl;
+        const src = angles.overview_tight || angles.overview_context || data.dataUrl;
         if (src) images.tree = { dataUrl: src, mediaType: "image/jpeg", source: `auto (${data.provider})` };
       }
 
@@ -724,7 +722,7 @@ function LeadCard({ it, tier, onUpdate, onRemove, onPromote, onEdit, onRefreshIm
           {DOMAINS.map((domain) => {
             const img = it.images[domain];
             const score = it.scores[domain]?.score;
-            const res = it.imageryMeta?.resolution?.[domain === "roof" ? "overview_tight" : domain === "driveway" ? "overview_hybrid_labeled" : "overview_context"] || it.imageryMeta?.resolution?.overview_tight;
+            const res = it.imageryMeta?.resolution?.overview_tight || it.imageryMeta?.resolution?.[domain === "driveway" ? "overview_hybrid_labeled" : "overview_context"];
             const title = img ? [
               it.imageryMeta?.provider ? `Provider: ${it.imageryMeta.provider}` : null,
               res?.metersPerPixel ? `Resolution: ~${res.metersPerPixel.toFixed(3)} m/px` : null,
