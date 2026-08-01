@@ -36,6 +36,31 @@ export default function LeadMap() {
   const [batchMeta, setBatchMeta] = useState({ total: 0, shown: 0, truncated: false, ok: true });
   const seenAddressesRef = useRef(null); // null until the first refresh completes, so we never toast on initial load
 
+  // Twin Cities Priority Engine toggle — pulls /api/top-leads (Evidence
+  // Index v1.1 + county-weighted priority score) instead of the raw
+  // batch_leads roof-only tier, scoped to the six-county strategic plan.
+  const [priorityMode, setPriorityMode] = useState(false);
+  const [priorityLeads, setPriorityLeads] = useState([]);
+  const [priorityLoading, setPriorityLoading] = useState(false);
+  const [priorityError, setPriorityError] = useState(null);
+
+  const fetchPriorityLeads = useCallback(async () => {
+    setPriorityLoading(true);
+    setPriorityError(null);
+    try {
+      const res = await fetch("/api/top-leads?limit=100");
+      const data = await res.json();
+      if (data.ok) setPriorityLeads(data.leads);
+      else setPriorityError(data.error || "Unknown error");
+    } catch (e) {
+      setPriorityError(e.message);
+    } finally {
+      setPriorityLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { if (priorityMode) fetchPriorityLeads(); }, [priorityMode, fetchPriorityLeads]);
+
   const refreshItems = useCallback(async () => {
     const localLeads = importConsoleProperties();
 
@@ -176,18 +201,37 @@ export default function LeadMap() {
     if (!map || !map.getSource || !map.getSource(SOURCE_ID)) return;
 
     const q = search.trim().toLowerCase();
-    const visible = items.filter((it) => {
-      if (tierFilter !== "all" && tierOf(it) !== tierFilter) return false;
-      if ((it.findingsScore ?? 0) < minScore) return false;
-      if (q && !it.address?.toLowerCase().includes(q)) return false;
-      return true;
-    });
 
-    const features = visible.map((it) => ({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [parseFloat(it.lon), parseFloat(it.lat)] },
-      properties: { address: it.address, score: it.findingsScore ?? 0, tier: tierOf(it), color: TIER_COLORS[tierOf(it)] },
-    }));
+    let features;
+    if (priorityMode) {
+      // Priority mode: color by human-review status, size by priority
+      // score, source is /api/top-leads not the raw batch_leads roof tier.
+      const visiblePriority = priorityLeads.filter((it) => {
+        if (q && !it.address?.toLowerCase().includes(q)) return false;
+        return true;
+      });
+      features = visiblePriority.map((it) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [parseFloat(it.lon), parseFloat(it.lat)] },
+        properties: {
+          address: it.address, score: it.priorityScore ?? 0,
+          tier: it.humanReview ? "hot" : "warm",
+          color: it.humanReview ? TIER_COLORS.hot : TIER_COLORS.warm,
+        },
+      }));
+    } else {
+      const visible = items.filter((it) => {
+        if (tierFilter !== "all" && tierOf(it) !== tierFilter) return false;
+        if ((it.findingsScore ?? 0) < minScore) return false;
+        if (q && !it.address?.toLowerCase().includes(q)) return false;
+        return true;
+      });
+      features = visible.map((it) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [parseFloat(it.lon), parseFloat(it.lat)] },
+        properties: { address: it.address, score: it.findingsScore ?? 0, tier: tierOf(it), color: TIER_COLORS[tierOf(it)] },
+      }));
+    }
     map.getSource(SOURCE_ID).setData({ type: "FeatureCollection", features });
 
     if (features.length) {
@@ -195,7 +239,7 @@ export default function LeadMap() {
       const lats = features.map((f) => f.geometry.coordinates[1]);
       map.fitBounds([[Math.min(...lons) - 0.01, Math.min(...lats) - 0.01], [Math.max(...lons) + 0.01, Math.max(...lats) + 0.01]], { padding: 60, maxZoom: 15 });
     }
-  }, [items, tierFilter, minScore, search, mapReady]);
+  }, [items, tierFilter, minScore, search, mapReady, priorityMode, priorityLeads]);
 
   useEffect(() => {
     const map = mapInstance.current;
@@ -238,8 +282,25 @@ export default function LeadMap() {
         <label style={{ fontSize: 12, color: MUTE, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
           <input type="checkbox" checked={heatmap} onChange={(e) => setHeatmap(e.target.checked)} /> Heat map
         </label>
+        <button
+          onClick={() => setPriorityMode((v) => !v)}
+          title="Six-county Evidence Index + property-value priority ranking (Hennepin/Ramsey/Dakota/Scott/Carver/Anoka)"
+          style={{
+            padding: "7px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700,
+            border: `1px solid ${priorityMode ? AMBER : LINE}`,
+            background: priorityMode ? AMBER + "22" : "transparent",
+            color: priorityMode ? AMBER : MUTE,
+          }}
+        >
+          🎯 Twin Cities Priority {priorityMode ? (priorityLoading ? "(loading…)" : `(${priorityLeads.length})`) : ""}
+        </button>
         <button onClick={refreshItems} style={{ padding: "6px 12px", background: "transparent", border: `1px solid ${LINE}`, borderRadius: 6, color: GREEN, fontSize: 12, cursor: "pointer" }}>↻ Refresh</button>
       </div>
+      {priorityMode && priorityError && (
+        <div style={{ padding: "8px 24px", fontSize: 12, color: TIER_COLORS.hot, borderBottom: `1px solid ${LINE}` }}>
+          Twin Cities Priority error: {priorityError}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, padding: "12px 24px", overflowX: "auto" }}>
         {Object.entries(TIER_COLORS).map(([tier, color]) => (
