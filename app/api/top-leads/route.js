@@ -1,5 +1,5 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
-import { enrichLeadValue, SUPPORTED_COUNTIES } from "../../../lib/twincities/propertyValue";
+import { SUPPORTED_COUNTIES } from "../../../lib/twincities/propertyValue";
 import { calculatePriority } from "../../../lib/twincities/priorityEngine";
 
 // GET /api/top-leads?tier=candidates|review|contractor
@@ -11,13 +11,26 @@ import { calculatePriority } from "../../../lib/twincities/priorityEngine";
 //
 // The six-county Twin Cities strategic pipeline:
 //   batch_leads (county filter, sales_status='new', permit_within_10y=false)
-//     -> enrich assessed_value (parcel_cache first, county ArcGIS on miss)
+//     -> read assessed_value (populated out-of-band by /api/sync-assessor-data's
+//        cron, NOT enriched live in this request — see note below)
 //     -> Evidence Index v1.1 (age/storm entry + additional evidence points)
 //     -> confidence score (data-completeness, separate from evidence)
 //     -> human-review determination
 //     -> Final Priority Score (45% evidence / 35% property value / 20% job estimate, x county multiplier)
 //     -> evidence_breakdown / review_status written back
 //     -> sorted, capped, returned
+//
+// This route used to call enrichLeadValue() inline per row on a cache miss,
+// hitting a live county ArcGIS endpoint synchronously inside the request.
+// With most rows still unenriched (the six county GIS URLs are unverified
+// guesses — see propertyValue.js's honest-status note), that meant nearly
+// every row in a 2000-row scan attempted a live network call before this
+// route could respond, reliably exceeding maxDuration and causing Vercel to
+// return a non-JSON timeout page instead of a response — the "Unexpected
+// token 'A', is not valid JSON" error this was fixed to stop reproducing.
+// Enrichment is /api/sync-assessor-data's job (paced, cron-scheduled,
+// decoupled from user requests); this route only ever reads what's already
+// on the row now, so it stays fast regardless of county GIS reachability.
 //
 // Storm evidence (hail_inches / wind_mph / heavySnowRegion etc.) is read
 // from whatever's already on the batch_leads row. This route does NOT run
@@ -52,7 +65,7 @@ export async function GET(req) {
     .eq("sales_status", "new")
     .eq("permit_within_10y", false)
     .neq("review_status", "rejected")
-    .limit(2000); // safety ceiling on the enrichment pass, not the final output
+    .limit(2000); // safety ceiling on the scoring pass, not the final output
 
   if (error) {
     return Response.json({ ok: false, error: error.message, leads: [], total: 0 }, { status: 500 });
@@ -61,47 +74,11 @@ export async function GET(req) {
     return Response.json({ ok: true, leads: [], total: 0, tier, note: "No matching leads. Confirm batch_leads.county is populated — it's a new column and may be empty for existing rows." });
   }
 
-  // 2. Enrich anything missing assessed_value. parcel_cache is checked
-  //    first inside enrichLeadValue; county GIS is only hit on a real
-  //    cache miss, with light pacing to be a polite citizen of six
-  //    different government servers.
-  const enriched = [];
-  for (const row of rows) {
-    let assessedValue = row.assessed_value;
-    let assessedYear = row.assessed_year;
-    let yearBuilt = row.year_built;
-    let valueSource = row.value_source;
-
-    if (!assessedValue && row.county && row.lat && row.lon) {
-      // enrichLeadValue already fails soft internally, but wrapped again
-      // here as defense-in-depth: this loop has no per-row boundary
-      // otherwise, so ANY unexpected throw for one lead (enrichment or the
-      // write-back below) would otherwise crash the whole tier's response
-      // instead of just leaving that one lead unenriched.
-      try {
-        const result = await enrichLeadValue(row, supabase);
-        if (result?.assessedValue) {
-          assessedValue = result.assessedValue;
-          assessedYear = result.assessedYear;
-          yearBuilt = yearBuilt || result.yearBuilt;
-          valueSource = result.source;
-
-          await supabase
-            .from("batch_leads")
-            .update({ assessed_value: assessedValue, assessed_year: assessedYear, year_built: yearBuilt, value_source: valueSource })
-            .eq("id", row.id);
-        }
-        if (result?.raw) await new Promise((r) => setTimeout(r, 250)); // only pace when a real network call happened (cache hits return raw:null, no need to throttle those)
-      } catch (err) {
-        console.warn(`[top-leads] enrichment failed for lead ${row.id}, continuing unenriched: ${err.message}`);
-      }
-    }
-
-    enriched.push({ ...row, assessed_value: assessedValue, assessed_year: assessedYear, year_built: yearBuilt, value_source: valueSource });
-  }
-
-  // 3. Score every lead: evidence -> confidence -> human review -> THEN priority.
-  const scored = enriched.map((row) => {
+  // 2. Score every lead: evidence -> confidence -> human review -> THEN
+  //    priority. Uses assessed_value/year_built/replacement_cost exactly as
+  //    they currently sit on the row — no live enrichment call here (see
+  //    the file-level note above for why that moved to sync-assessor-data).
+  const scored = rows.map((row) => {
     const priorityInput = {
       county: row.county,
       yearBuilt: row.year_built,
@@ -126,7 +103,7 @@ export async function GET(req) {
     return { ...row, ...result };
   });
 
-  // 4. Write the full audit trail back — evidence_breakdown answers "why
+  // 3. Write the full audit trail back — evidence_breakdown answers "why
   //    did this score X" without re-deriving anything; review_status only
   //    advances to 'pending' the first time (never overwrites an existing
   //    approved/rejected/contractor_sent state a human already set).
@@ -149,7 +126,7 @@ export async function GET(req) {
       )
   );
 
-  // 5. Apply the requested tier filter, rank, cap.
+  // 4. Apply the requested tier filter, rank, cap.
   let pool = scored.filter((r) => r.entered && r.priorityScore > 0);
   if (tier === "review") pool = pool.filter((r) => r.humanReview);
   if (tier === "contractor") pool = pool.filter((r) => r.review_status === "approved" || r.reviewStatus === "approved");
