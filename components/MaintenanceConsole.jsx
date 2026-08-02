@@ -31,6 +31,11 @@ export default function MaintenanceConsole() {
   const [stormBusy, setStormBusy] = useState(false);
   const [stormResult, setStormResult] = useState(null);
 
+  const [eiCounty, setEiCounty] = useState("");
+  const [eiLimit, setEiLimit] = useState(25);
+  const [eiBusy, setEiBusy] = useState(false);
+  const [eiResult, setEiResult] = useState(null);
+
   function pushLog(entry) {
     setLog((l) => [{ id: Math.random().toString(36).slice(2), at: nowStamp(), entry }, ...l].slice(0, 30));
   }
@@ -85,6 +90,25 @@ export default function MaintenanceConsole() {
       pushLog(`Storm scan errored: ${e.message}`);
     } finally {
       setStormBusy(false);
+    }
+  }
+
+  async function runEvidenceIndex() {
+    setEiBusy(true);
+    setEiResult(null);
+    pushLog(`Evidence Index started — ${eiCounty.trim() || "all six counties"}, limit ${eiLimit}`);
+    try {
+      const params = new URLSearchParams({ limit: String(eiLimit) });
+      if (eiCounty.trim()) params.set("county", eiCounty.trim().toLowerCase());
+      const res = await fetch(`/api/evidence-index?${params.toString()}`, { method: "POST" });
+      const data = await res.json();
+      setEiResult(data);
+      pushLog(data.ok ? `Evidence Index complete — ${data.scanned ?? 0} scanned, ${data.reviewCount ?? 0} flagged for review` : `Evidence Index failed: ${data.error}`);
+    } catch (e) {
+      setEiResult({ ok: false, error: e.message });
+      pushLog(`Evidence Index errored: ${e.message}`);
+    } finally {
+      setEiBusy(false);
     }
   }
 
@@ -169,6 +193,31 @@ export default function MaintenanceConsole() {
               {stormResult.triggered
                 ? `Triggered — ${stormResult.affectedZips?.join(", ")} — ${stormResult.leadsQueued} lead(s) queued`
                 : stormResult.note || stormResult.error || "No alert matched."}
+            </div>
+          )}
+        </div>
+
+        <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 11, color: AMBER, fontFamily: "monospace", marginBottom: 10 }}>EVIDENCE INDEX</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <input style={{ ...inputStyle, flex: 1, minWidth: 120 }} placeholder="County (blank = all six)" value={eiCounty} onChange={(e) => setEiCounty(e.target.value)} />
+            <input style={{ ...inputStyle, width: 90 }} type="number" min={1} max={100} value={eiLimit} onChange={(e) => setEiLimit(e.target.value)} />
+            <button onClick={runEvidenceIndex} disabled={eiBusy} style={btnStyle(BLUE)}>{eiBusy ? "Scoring…" : "Run pipeline"}</button>
+          </div>
+          {eiResult && (
+            <div style={{ fontSize: 12, color: eiResult.ok ? GREEN : RED }}>
+              {eiResult.ok
+                ? `Scanned ${eiResult.scanned} · ${eiResult.reviewCount} flagged for review${eiResult.note ? ` — ${eiResult.note}` : ""}`
+                : eiResult.error}
+              {eiResult.ok && eiResult.results?.length > 0 && (
+                <div style={{ marginTop: 8, maxHeight: 160, overflowY: "auto" }}>
+                  {eiResult.results.slice(0, 20).map((r) => (
+                    <div key={r.id} style={{ padding: "4px 0", borderTop: `1px solid ${LINE}`, color: r.reviewRequired ? AMBER : MUTE }}>
+                      {r.address} — evidence {r.evidenceScore} · confidence {r.confidenceScore} · opp ${r.opportunityRawDollars?.toLocaleString()} ({r.opportunityNormalized}) {r.reviewRequired ? "· REVIEW" : ""}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
