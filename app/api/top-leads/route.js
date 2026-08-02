@@ -73,19 +73,28 @@ export async function GET(req) {
     let valueSource = row.value_source;
 
     if (!assessedValue && row.county && row.lat && row.lon) {
-      const result = await enrichLeadValue(row, supabase);
-      if (result?.assessedValue) {
-        assessedValue = result.assessedValue;
-        assessedYear = result.assessedYear;
-        yearBuilt = yearBuilt || result.yearBuilt;
-        valueSource = result.source;
+      // enrichLeadValue already fails soft internally, but wrapped again
+      // here as defense-in-depth: this loop has no per-row boundary
+      // otherwise, so ANY unexpected throw for one lead (enrichment or the
+      // write-back below) would otherwise crash the whole tier's response
+      // instead of just leaving that one lead unenriched.
+      try {
+        const result = await enrichLeadValue(row, supabase);
+        if (result?.assessedValue) {
+          assessedValue = result.assessedValue;
+          assessedYear = result.assessedYear;
+          yearBuilt = yearBuilt || result.yearBuilt;
+          valueSource = result.source;
 
-        await supabase
-          .from("batch_leads")
-          .update({ assessed_value: assessedValue, assessed_year: assessedYear, year_built: yearBuilt, value_source: valueSource })
-          .eq("id", row.id);
+          await supabase
+            .from("batch_leads")
+            .update({ assessed_value: assessedValue, assessed_year: assessedYear, year_built: yearBuilt, value_source: valueSource })
+            .eq("id", row.id);
+        }
+        if (result?.raw) await new Promise((r) => setTimeout(r, 250)); // only pace when a real network call happened (cache hits return raw:null, no need to throttle those)
+      } catch (err) {
+        console.warn(`[top-leads] enrichment failed for lead ${row.id}, continuing unenriched: ${err.message}`);
       }
-      if (result?.raw) await new Promise((r) => setTimeout(r, 250)); // only pace when a real network call happened (cache hits return raw:null, no need to throttle those)
     }
 
     enriched.push({ ...row, assessed_value: assessedValue, assessed_year: assessedYear, year_built: yearBuilt, value_source: valueSource });
