@@ -75,7 +75,7 @@ export async function GET(req) {
 
   const { data: candidates, error } = await supabase
     .from("batch_leads")
-    .select("id, address, county, lat, lon")
+    .select("id, address, city, county, lat, lon")
     .in("county", counties)
     .not("lat", "is", null)
     .not("lon", "is", null)
@@ -89,11 +89,11 @@ export async function GET(req) {
   const candidateIds = candidates.map((r) => r.id);
   const { data: already, error: alreadyError } = await supabase
     .from("property_images")
-    .select("lead_id")
-    .in("lead_id", candidateIds);
+    .select("property_id")
+    .in("property_id", candidateIds);
   if (alreadyError) return Response.json({ ok: false, error: alreadyError.message }, { status: 500 });
 
-  const doneIds = new Set((already || []).map((r) => r.lead_id));
+  const doneIds = new Set((already || []).map((r) => r.property_id));
   const rows = candidates.filter((r) => !doneIds.has(r.id)).slice(0, limit);
 
   if (rows.length === 0) {
@@ -125,14 +125,13 @@ export async function GET(req) {
     const { data: urlData } = supabase.storage.from("property-images").getPublicUrl(storagePath);
 
     await supabase.from("property_images").insert({
-      lead_id: row.id,
+      property_id: row.id,
       county: row.county,
+      city: row.city,
       address: row.address,
-      lat: row.lat,
-      lon: row.lon,
       provider: img.provider,
       storage_path: storagePath,
-      public_url: urlData?.publicUrl ?? null,
+      image_url: urlData?.publicUrl ?? null,
     });
 
     counts[img.provider]++;
