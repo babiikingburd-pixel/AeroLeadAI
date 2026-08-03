@@ -83,7 +83,11 @@ export default function AuthGate({ children }) {
 
   // Customer Portal (/portal/[token]) is for homeowners, not internal staff —
   // it's protected by its own unguessable per-job token instead of this gate.
-  if (pathname?.startsWith("/portal/")) return children;
+  // /twincities is exempted too, temporarily — Supabase magic-link email has
+  // no working delivery on this project yet (rate-limited on the built-in
+  // sender), so the gate itself is currently unusable. Remove this exemption
+  // once real SMTP is configured in Supabase Auth settings.
+  if (pathname?.startsWith("/portal/") || pathname?.startsWith("/twincities")) return children;
 
   if (!authChecked) return null;
 
