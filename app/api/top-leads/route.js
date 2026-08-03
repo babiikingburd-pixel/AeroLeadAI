@@ -65,7 +65,7 @@ export async function GET(req) {
     .eq("sales_status", "new")
     .eq("permit_within_10y", false)
     .neq("review_status", "rejected")
-    .limit(400); // safety ceiling on the scoring pass, not the final output
+    .limit(400); // reduced from 2000 — this project runs on the smallest free-tier compute (t4g.nano); a 2000-row scan plus its write-back burst was very likely what's been intermittently overwhelming it (a real Postgres restart showed up in the logs), not a bug in the scoring logic itself.
 
   if (error) {
     return Response.json({ ok: false, error: error.message, leads: [], total: 0 }, { status: 500 });
@@ -107,6 +107,10 @@ export async function GET(req) {
   //    did this score X" without re-deriving anything; review_status only
   //    advances to 'pending' the first time (never overwrites an existing
   //    approved/rejected/contractor_sent state a human already set).
+  //    Chunked into small sequential batches rather than one large
+  //    concurrent Promise.all — this project's free-tier compute
+  //    (t4g.nano) showed signs of real resource pressure under bursts of
+  //    concurrent writes (see the row-limit comment above).
   const enteredRows = scored.filter((r) => r.entered);
   const WRITE_CHUNK_SIZE = 25;
   for (let i = 0; i < enteredRows.length; i += WRITE_CHUNK_SIZE) {

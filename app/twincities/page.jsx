@@ -24,22 +24,64 @@ export default function TwinCitiesPriorityPage() {
   const [exportStatus, setExportStatus] = useState(null);
   const [crawling, setCrawling] = useState(false);
   const [crawlStatus, setCrawlStatus] = useState(null);
+  const [showingCache, setShowingCache] = useState(false);
+  const [cacheTimestamp, setCacheTimestamp] = useState(null);
+
+  const cacheKey = (t) => `twincities_cache_${t}`;
+
+  // Load whatever's cached for this tier immediately (synchronous, instant,
+  // works with zero network) — this is what keeps leads visible through
+  // database hiccups, PostgREST schema-cache errors, or any other transient
+  // /api/top-leads failure: none of it should blank the page that was
+  // showing real data a moment ago. Only ever shows data that was real at
+  // some point — never fabricated, never a placeholder.
+  const loadFromCache = (t) => {
+    try {
+      const raw = localStorage.getItem(cacheKey(t));
+      if (!raw) return false;
+      const cached = JSON.parse(raw);
+      setLeads(cached.leads || []);
+      setMeta(cached.meta || null);
+      setCacheTimestamp(cached.timestamp);
+      setShowingCache(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const saveToCache = (t, leadsData, metaData) => {
+    try {
+      localStorage.setItem(cacheKey(t), JSON.stringify({ leads: leadsData, meta: metaData, timestamp: Date.now() }));
+    } catch {
+      // localStorage full or unavailable (private browsing) — fail soft,
+      // this is a resilience feature, it should never itself cause an error.
+    }
+  };
 
   const load = useCallback(async (t) => {
     setLoading(true);
     setError(null);
+    const hadCache = loadFromCache(t); // show something immediately, before the network call even starts
     try {
       const res = await fetch(`/api/top-leads?tier=${t}`);
       const data = await res.json();
       if (data.ok) {
         setLeads(data.leads);
         setMeta({ scanned: data.scanned, entered: data.entered, cap: data.cap });
-      } else {
+        setShowingCache(false);
+        saveToCache(t, data.leads, { scanned: data.scanned, entered: data.entered, cap: data.cap });
+      } else if (!hadCache) {
+        // Only show the error if there's genuinely nothing to fall back to
+        // — if cached data is already on screen, a live-fetch failure
+        // shouldn't rip it away and replace it with a red error message.
         setError(data.error || data.note || "Unknown error");
         setLeads([]);
       }
     } catch (e) {
-      setError(e.message);
+      if (!hadCache) setError(e.message);
+      // else: silently keep showing the cached data already on screen —
+      // the "showing cached data" banner already communicates this.
     } finally {
       setLoading(false);
     }
@@ -69,7 +111,7 @@ export default function TwinCitiesPriorityPage() {
       if (data.ok) {
         setCrawlStatus({
           ok: true,
-          message: data.note || `Processed ${data.processed} · Google ${data.google} · Mapbox ${data.mapbox} · Esri ${data.esri} · Failed ${data.failed}`,
+          message: data.note || `Processed ${data.processed} · Google ${data.google} · Mapbox ${data.mapbox} · Esri ${data.esri} · Failed ${data.failed}. Click again for the next batch.`,
         });
       } else {
         setCrawlStatus({ ok: false, message: data.error || "Image crawl failed." });
@@ -148,6 +190,12 @@ export default function TwinCitiesPriorityPage() {
       {meta && (
         <div style={{ fontSize: 11, color: HUD.muted, marginBottom: 12 }}>
           Scanned {meta.scanned} · Entered Evidence Index {meta.entered} · Cap {meta.cap}
+        </div>
+      )}
+
+      {showingCache && cacheTimestamp && (
+        <div style={{ fontSize: 12, color: HUD.amber, marginBottom: 12, padding: "8px 12px", border: `1px solid ${HUD.amber}`, borderRadius: 4 }}>
+          📴 Showing cached data from {new Date(cacheTimestamp).toLocaleString()} — live refresh {loading ? "in progress…" : "failed or hasn't run yet"}. This is real data from the last successful load, not placeholder content.
         </div>
       )}
 
