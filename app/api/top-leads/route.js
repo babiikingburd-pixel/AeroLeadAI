@@ -153,7 +153,35 @@ export async function GET(req) {
       categories: r.categories,
       breakdown: r.breakdown,
       route: r.route,
+      imageUrl: null, // filled in below when a property_images row exists; stays null otherwise
     }));
+
+  // 5. Attach imageUrl from property_images (populated out-of-band by
+  //    /api/image-crawler) — a lead can have zero or one row here in
+  //    normal operation (the crawler skips property_ids that already have
+  //    one), but sorted by fetched_at desc and keeping the first match per
+  //    id is a cheap guard against ever showing a stale image if that
+  //    assumption changes later. Wrapped in try/catch: a failed image
+  //    lookup should never take down the leads response itself.
+  try {
+    const ids = top.map((r) => r.id);
+    if (ids.length > 0) {
+      const { data: images, error: imagesError } = await supabase
+        .from("property_images")
+        .select("property_id, image_url, fetched_at")
+        .in("property_id", ids)
+        .order("fetched_at", { ascending: false });
+      if (!imagesError && images) {
+        const imageByPropertyId = new Map();
+        for (const img of images) {
+          if (!imageByPropertyId.has(img.property_id)) imageByPropertyId.set(img.property_id, img.image_url);
+        }
+        for (const lead of top) lead.imageUrl = imageByPropertyId.get(lead.id) ?? null;
+      }
+    }
+  } catch (err) {
+    console.warn(`[top-leads] property_images lookup failed, continuing without images: ${err.message}`);
+  }
 
   return Response.json({
     ok: true,

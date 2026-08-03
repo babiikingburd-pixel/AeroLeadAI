@@ -176,6 +176,20 @@ export default function TwinCitiesPriorityPage() {
               {tier === "contractor" && (
                 <input type="checkbox" checked={!!selected[lead.id]} onChange={() => toggleSelect(lead.id)} />
               )}
+              {lead.imageUrl ? (
+                <img
+                  src={lead.imageUrl}
+                  alt={lead.address}
+                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4, flexShrink: 0, border: `1px solid ${HUD.lineDim}` }}
+                />
+              ) : (
+                <div
+                  title="No image yet"
+                  style={{ width: 64, height: 64, flexShrink: 0, borderRadius: 4, border: `1px dashed ${HUD.lineDim}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: HUD.muted, textAlign: "center", padding: 4 }}
+                >
+                  no image yet
+                </div>
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 700 }}>{lead.address}</div>
                 <div style={{ fontSize: 11, color: HUD.muted }}>{lead.city} · {COUNTY_LABEL[lead.county] || lead.county} County</div>
