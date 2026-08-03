@@ -65,7 +65,7 @@ export async function GET(req) {
     .eq("sales_status", "new")
     .eq("permit_within_10y", false)
     .neq("review_status", "rejected")
-    .limit(2000); // safety ceiling on the scoring pass, not the final output
+    .limit(400); // safety ceiling on the scoring pass, not the final output
 
   if (error) {
     return Response.json({ ok: false, error: error.message, leads: [], total: 0 }, { status: 500 });
@@ -107,10 +107,12 @@ export async function GET(req) {
   //    did this score X" without re-deriving anything; review_status only
   //    advances to 'pending' the first time (never overwrites an existing
   //    approved/rejected/contractor_sent state a human already set).
-  await Promise.all(
-    scored
-      .filter((r) => r.entered)
-      .map((r) =>
+  const enteredRows = scored.filter((r) => r.entered);
+  const WRITE_CHUNK_SIZE = 25;
+  for (let i = 0; i < enteredRows.length; i += WRITE_CHUNK_SIZE) {
+    const chunk = enteredRows.slice(i, i + WRITE_CHUNK_SIZE);
+    await Promise.all(
+      chunk.map((r) =>
         supabase
           .from("batch_leads")
           .update({
@@ -124,7 +126,8 @@ export async function GET(req) {
           })
           .eq("id", r.id)
       )
-  );
+    );
+  }
 
   // 4. Apply the requested tier filter, rank, cap.
   let pool = scored.filter((r) => r.entered && r.priorityScore > 0);
