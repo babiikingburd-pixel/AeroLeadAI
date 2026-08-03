@@ -22,6 +22,8 @@ export default function TwinCitiesPriorityPage() {
   const [selected, setSelected] = useState({});
   const [contractorName, setContractorName] = useState("");
   const [exportStatus, setExportStatus] = useState(null);
+  const [crawling, setCrawling] = useState(false);
+  const [crawlStatus, setCrawlStatus] = useState(null);
 
   const load = useCallback(async (t) => {
     setLoading(true);
@@ -56,6 +58,27 @@ export default function TwinCitiesPriorityPage() {
 
   function toggleSelect(id) {
     setSelected((cur) => ({ ...cur, [id]: !cur[id] }));
+  }
+
+  async function fetchImages() {
+    setCrawling(true);
+    setCrawlStatus(null);
+    try {
+      const res = await fetch("/api/image-crawler?limit=25");
+      const data = await res.json();
+      if (data.ok) {
+        setCrawlStatus({
+          ok: true,
+          message: data.note || `Processed ${data.processed} · Google ${data.google} · Mapbox ${data.mapbox} · Esri ${data.esri} · Failed ${data.failed}`,
+        });
+      } else {
+        setCrawlStatus({ ok: false, message: data.error || "Image crawl failed." });
+      }
+    } catch (e) {
+      setCrawlStatus({ ok: false, message: e.message });
+    } finally {
+      setCrawling(false);
+    }
   }
 
   async function exportToContractor() {
@@ -107,7 +130,20 @@ export default function TwinCitiesPriorityPage() {
         <button onClick={() => load(tier)} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.green }}>
           ↻ Refresh
         </button>
+        <button
+          onClick={fetchImages}
+          disabled={crawling}
+          style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.amber, opacity: crawling ? 0.6 : 1 }}
+        >
+          {crawling ? "📷 Fetching…" : "📷 Fetch Images (next 25)"}
+        </button>
       </div>
+
+      {crawlStatus && (
+        <div style={{ fontSize: 11, color: crawlStatus.ok ? HUD.green : HUD.red, marginBottom: 12 }}>
+          {crawlStatus.message}
+        </div>
+      )}
 
       {meta && (
         <div style={{ fontSize: 11, color: HUD.muted, marginBottom: 12 }}>
