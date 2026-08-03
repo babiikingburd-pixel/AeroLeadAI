@@ -173,6 +173,18 @@ export default function TwinCitiesPriorityPage() {
           ↻ Refresh
         </button>
         <button
+          onClick={() => window.open("/twincities/contractor-prospects", "_blank", "noopener,noreferrer")}
+          style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.green}`, background: "rgba(61,220,151,0.08)", color: HUD.green }}
+        >
+          🏠 Contractor Prospects + Pitches
+        </button>
+        <button
+          onClick={() => window.open("/twincities/apex10", "_blank", "noopener,noreferrer")}
+          style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.amber}`, background: "rgba(255,190,80,0.08)", color: HUD.amber }}
+        >
+          🎯 APEX 10 Report
+        </button>
+        <button
           onClick={fetchImages}
           disabled={crawling}
           style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.amber, opacity: crawling ? 0.6 : 1 }}

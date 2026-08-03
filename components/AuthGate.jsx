@@ -65,7 +65,7 @@ export default function AuthGate({ children }) {
   }, []);
 
   function unlockWithPassword() {
-    if (passwordInput === ACCESS_PASSWORD) {
+    if (passwordInput.trim().toLowerCase() === ACCESS_PASSWORD.toLowerCase()) {
       try { window.localStorage.setItem(UNLOCK_KEY, "1"); } catch {}
       setLoggedIn(true);
     } else {
@@ -83,11 +83,7 @@ export default function AuthGate({ children }) {
 
   // Customer Portal (/portal/[token]) is for homeowners, not internal staff —
   // it's protected by its own unguessable per-job token instead of this gate.
-  // /twincities is exempted too, temporarily — Supabase magic-link email has
-  // no working delivery on this project yet (rate-limited on the built-in
-  // sender), so the gate itself is currently unusable. Remove this exemption
-  // once real SMTP is configured in Supabase Auth settings.
-  if (pathname?.startsWith("/portal/") || pathname?.startsWith("/twincities")) return children;
+  if (pathname?.startsWith("/portal/")) return children;
 
   if (!authChecked) return null;
 
@@ -98,43 +94,24 @@ export default function AuthGate({ children }) {
           <div style={{ fontSize: 11, letterSpacing: 2, color: AMBER, fontFamily: "monospace" }}>AEROLEADAI</div>
           <h1 style={{ color: "#dfe6ee", fontSize: 20, margin: "6px 0 16px" }}>Property Intelligence</h1>
 
-          {supabase ? (
-            magicSent ? (
-              <p style={{ color: GREEN, fontSize: 13 }}>Check your email for a sign-in link.</p>
-            ) : (
-              <>
-                <input
-                  type="email"
-                  value={magicEmail}
-                  onChange={(e) => setMagicEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && sendMagicLink()}
-                  placeholder="you@company.com"
-                  style={{ width: "100%", padding: 12, margin: "10px 0", background: PANEL2, border: `1px solid ${LINE}`, color: "#dfe6ee", borderRadius: 8, boxSizing: "border-box" }}
-                />
-                <button onClick={sendMagicLink} style={{ width: "100%", padding: 12, background: AMBER, color: "#1a1200", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>
-                  Send sign-in link
-                </button>
-                {magicError && <p style={{ color: SIGNAL, fontSize: 12, marginTop: 10 }}>{magicError}</p>}
-              </>
-            )
-          ) : (
-            <>
-              <p style={{ color: MUTE, fontSize: 13 }}>Enter access code</p>
-              <input
-                type="password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && unlockWithPassword()}
-                placeholder="Access code"
-                style={{ width: "100%", padding: 12, margin: "10px 0", background: PANEL2, border: `1px solid ${LINE}`, color: "#dfe6ee", borderRadius: 8, boxSizing: "border-box" }}
-              />
-              <button onClick={unlockWithPassword} style={{ width: "100%", padding: 12, background: AMBER, color: "#1a1200", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>
-                Enter
-              </button>
-              {loginError && <p style={{ color: SIGNAL, fontSize: 12, marginTop: 10 }}>Wrong code — try again.</p>}
-              <p style={{ color: MUTE, fontSize: 11, marginTop: 14 }}>You'll only need to do this once per device.</p>
-            </>
-          )}
+          {/* Password gate is the primary lock — Supabase magic-link email
+              is not reliably delivering yet on this project, and this app's
+              contents (including live contractor pitch data) should not be
+              left unprotected while that's sorted out. */}
+          <p style={{ color: MUTE, fontSize: 13 }}>Enter access code</p>
+          <input
+            type="password"
+            value={passwordInput}
+            onChange={(e) => setPasswordInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && unlockWithPassword()}
+            placeholder="Access code"
+            style={{ width: "100%", padding: 12, margin: "10px 0", background: PANEL2, border: `1px solid ${LINE}`, color: "#dfe6ee", borderRadius: 8, boxSizing: "border-box" }}
+          />
+          <button onClick={unlockWithPassword} style={{ width: "100%", padding: 12, background: AMBER, color: "#1a1200", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>
+            Enter
+          </button>
+          {loginError && <p style={{ color: SIGNAL, fontSize: 12, marginTop: 10 }}>Wrong code — try again.</p>}
+          <p style={{ color: MUTE, fontSize: 11, marginTop: 14 }}>You'll only need to do this once per device.</p>
         </div>
       </div>
     );
