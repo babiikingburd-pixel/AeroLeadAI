@@ -16,6 +16,11 @@ out/
 .cache/
 .upm/
 
+# Standalone validator — local secrets, local SQLite state, local venv
+tools/standalone-validator/config.env
+tools/standalone-validator/*.db
+tools/standalone-validator/venv/
+
 # Misc
 .DS_Store
 *.log

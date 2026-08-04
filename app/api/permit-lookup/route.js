@@ -94,7 +94,13 @@ export async function GET(req) {
             await fetch(endpoint, {
               method: "POST",
               headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-              body: JSON.stringify(rows.map((r) => ({ address, address_normalized: normalize(address), ...r, source: "shovels" }))),
+              // address_normalized is deliberately absent: it's a GENERATED
+              // ALWAYS column, and Postgres rejects any INSERT that supplies a
+              // value for it ("cannot insert a non-DEFAULT value into column").
+              // It used to be sent here, so every cache write failed into the
+              // empty catch below — silently, which is why the directory stayed
+              // empty and each address kept re-billing Shovels.
+              body: JSON.stringify(rows.map((r) => ({ address, ...r, source: "shovels" }))),
             });
           } catch { /* best-effort cache — a save failure shouldn't block the response */ }
         }
