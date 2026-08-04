@@ -62,13 +62,17 @@ export async function GET(req) {
   // FIX (verified against production): this query had no ORDER BY, so a
   // plain .limit(400) returned whatever 400 rows Postgres's default scan
   // order happened to surface first — which turned out to be an unbroken
-  // run of raw OSM-import rows (id LIKE 'osm-node-%') with year_built NULL
-  // and no priority_score. Every one of them failed checkEntry (age null,
-  // no storm data yet), so the API returned 0 leads even though 136,904
-  // real, already-scored residential leads exist in the same table. Adding
-  // year_built IS NOT NULL + ordering by priority_score (already computed
-  // by the enrichment pipeline this session) surfaces the real leads
-  // instead of an arbitrary unscored slice.
+  // run of raw OSM-import rows (id LIKE 'osm-node-%'), all sitting at the
+  // schema default priority_score of 0. Ordering by priority_score desc is
+  // the actual fix: with 130k+ leads already scored above 0, the zero-score
+  // rows never reach the top 400 regardless of what else is null on them.
+  //
+  // Deliberately NOT filtering out null year_built here (an earlier version
+  // of this fix did, and it was wrong): checkEntry()'s storm-override route
+  // lets a lead earn a real score from storm evidence alone, with
+  // year_built staying null the whole time. Filtering on year_built would
+  // hide that lead from this endpoint forever even after it legitimately
+  // earns a score — leads should only ever get better, never disappear.
   const { data: rows, error } = await supabase
     .from("batch_leads")
     .select("*")
@@ -76,7 +80,6 @@ export async function GET(req) {
     .eq("sales_status", "new")
     .eq("permit_within_10y", false)
     .neq("review_status", "rejected")
-    .not("year_built", "is", null)
     .order("priority_score", { ascending: false, nullsFirst: false })
     .limit(400);
 
