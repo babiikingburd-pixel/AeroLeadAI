@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+import { applyEvidenceAndRescore } from "../../../../lib/twincities/evidenceEvents";
 
 // NOAA Storm Events backfill.
 //
@@ -17,6 +18,13 @@ import { supabaseServer } from "../../../../lib/supabaseServer";
 //
 // POST /api/enrich/storm-backfill
 // body: { year?: number, radiusMiles?: number, dryRun?: boolean, limit?: number }
+// NOTE ON maxDuration BELOW: 300s requires Vercel Pro. This project is
+// confirmed on the free/Hobby tier (Advanced Deployment Protection returned
+// "not enabled on your team" when tested), which caps serverless functions
+// far lower in practice. A single call trying to page through all 152,203
+// leads will likely time out mid-run before hitting this ceiling. Call this
+// route repeatedly with `offset` advancing by `limit` each time (e.g. limit
+// 5000, offset 0, then 5000, then 10000...) rather than one giant call.
 export const maxDuration = 300;
 
 const MN_BBOX = { minLat: 43.4, maxLat: 49.4, minLon: -97.3, maxLon: -89.5 };
@@ -117,7 +125,8 @@ export async function POST(req) {
   const year = body.year ?? new Date().getFullYear() - 1;
   const radiusMiles = body.radiusMiles ?? 3;
   const dryRun = body.dryRun === true;
-  const limit = Math.min(body.limit ?? 5000, 50000);
+  const limit = Math.min(body.limit ?? 5000, 200000); // safe default chunk; raise only if you've confirmed Pro/longer timeouts
+  const startOffset = Math.max(body.offset ?? 0, 0);
 
   try {
     const csvText = await fetchStormEvents(year);
@@ -126,16 +135,31 @@ export async function POST(req) {
       return Response.json({ ok: true, year, eventsFound: 0, matched: 0, note: "No qualifying MN storm events for this year." });
     }
 
-    const { data: leads, error } = await supabase
-      .from("batch_leads")
-      .select("id, lat, lon, hail_inches, wind_mph")
-      .not("lat", "is", null)
-      .not("lon", "is", null)
-      .limit(limit);
-    if (error) throw new Error(error.message);
+    // Paginate through ALL leads with coordinates, not a single capped
+    // query. batch_leads has 152,203 rows; a single .limit() call was
+    // silently only ever checking a third of the database against storm
+    // events. `limit` here now means "max rows to page through", default
+    // large enough to cover the whole table.
+    const PAGE_SIZE = 1000;
+    let leads = [];
+    let offset = startOffset;
+    while (leads.length < limit) {
+      const { data: page, error } = await supabase
+        .from("batch_leads")
+        .select("id, lat, lon, hail_inches, wind_mph, county, year_built, permit_within_10y, permit_notes, assessed_value, review_status, replacement_cost, damage_notes, driveway_score, priority_score")
+        .not("lat", "is", null)
+        .not("lon", "is", null)
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (error) throw new Error(error.message);
+      if (!page?.length) break;
+      leads.push(...page);
+      offset += PAGE_SIZE;
+      if (page.length < PAGE_SIZE) break; // last page
+    }
+    leads = leads.slice(0, limit);
 
     const updates = [];
-    for (const lead of leads || []) {
+    for (const lead of leads) {
       let bestHail = null, bestWind = null, bestDate = null;
       for (const ev of events) {
         if (Math.abs(ev.lat - lead.lat) > 0.1 || Math.abs(ev.lon - lead.lon) > 0.1) continue; // cheap prefilter
@@ -144,32 +168,49 @@ export async function POST(req) {
         if (ev.windMph != null && (bestWind == null || ev.windMph > bestWind)) { bestWind = ev.windMph; bestDate = bestDate || ev.date; }
       }
       if (bestHail != null || bestWind != null) {
-        updates.push({
-          id: lead.id,
-          hail_inches: bestHail,
-          wind_mph: bestWind,
-          storm_date: bestDate ? new Date(bestDate).toISOString().slice(0, 10) : null,
-        });
+        updates.push({ lead, hail_inches: bestHail, wind_mph: bestWind, storm_date: bestDate ? new Date(bestDate).toISOString().slice(0, 10) : null });
       }
     }
 
     if (dryRun) {
-      return Response.json({ ok: true, dryRun: true, year, eventsFound: events.length, wouldUpdate: updates.length, sample: updates.slice(0, 5) });
+      return Response.json({
+        ok: true, dryRun: true, year, eventsFound: events.length,
+        leadsScanned: leads.length, wouldUpdate: updates.length,
+        sample: updates.slice(0, 5).map((u) => ({ id: u.lead.id, hail_inches: u.hail_inches, wind_mph: u.wind_mph })),
+      });
     }
 
-    let written = 0;
-    for (let i = 0; i < updates.length; i += 500) {
-      const chunk = updates.slice(i, i + 500);
-      for (const u of chunk) {
-        const { error: upErr } = await supabase
-          .from("batch_leads")
-          .update({ hail_inches: u.hail_inches, wind_mph: u.wind_mph, storm_date: u.storm_date })
-          .eq("id", u.id);
-        if (!upErr) written++;
+    // RE-SCORE every lead that actually got new storm evidence, via the
+    // shared evidence-event handler (was: hand-rolled calculatePriority +
+    // update + score_history insert, duplicated near-verbatim in
+    // priority-worker — now one function both use). Writing hail_inches/
+    // wind_mph without a rescore step was the exact gap flagged: storm data
+    // landing in the database but never reaching the ranking engine.
+    let written = 0, rescored = 0, historyFailures = 0;
+    for (const u of updates) {
+      try {
+        const result = await applyEvidenceAndRescore(
+          supabase,
+          u.lead,
+          { hail_inches: u.hail_inches, wind_mph: u.wind_mph, storm_date: u.storm_date, storm_evidence_status: "verified" },
+          "storm_backfill",
+          { hailInches: u.hail_inches, windMph: u.wind_mph, stormDate: u.storm_date, year },
+        );
+        written++;
+        rescored++;
+        if (result.historyFailed) historyFailures++;
+      } catch (e) {
+        // A failed write here means this lead's storm data did NOT save —
+        // do not count it toward `written`.
       }
     }
 
-    return Response.json({ ok: true, year, eventsFound: events.length, matched: updates.length, written, radiusMiles });
+    return Response.json({
+      ok: true, year, eventsFound: events.length, leadsScanned: leads.length,
+      matched: updates.length, written, rescored, historyFailures, radiusMiles,
+      nextOffset: startOffset + leads.length,
+      note: leads.length === limit ? `More leads may remain — call again with offset:${startOffset + leads.length}` : "Reached end of table.",
+    });
   } catch (e) {
     return Response.json({ ok: false, error: e.message }, { status: 500 });
   }

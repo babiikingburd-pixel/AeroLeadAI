@@ -83,7 +83,6 @@ export async function GET(req) {
       county: row.county,
       yearBuilt: row.year_built,
       permit_within_10y: row.permit_within_10y,
-      permitChecked: !!(row.permit_notes && row.permit_notes.length > 0),
       hailInches: row.hail_inches,
       windMph: row.wind_mph,
       assessedValue: row.assessed_value,
