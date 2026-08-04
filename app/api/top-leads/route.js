@@ -58,6 +58,17 @@ export async function GET(req) {
   // 1. Pull the working set: six target counties, unworked, no roof permit
   //    within 10 years (the "hasn't been touched" filter from the plan).
   //    Rejected leads are excluded here too — a human already said no.
+  //
+  // FIX (verified against production): this query had no ORDER BY, so a
+  // plain .limit(400) returned whatever 400 rows Postgres's default scan
+  // order happened to surface first — which turned out to be an unbroken
+  // run of raw OSM-import rows (id LIKE 'osm-node-%') with year_built NULL
+  // and no priority_score. Every one of them failed checkEntry (age null,
+  // no storm data yet), so the API returned 0 leads even though 136,904
+  // real, already-scored residential leads exist in the same table. Adding
+  // year_built IS NOT NULL + ordering by priority_score (already computed
+  // by the enrichment pipeline this session) surfaces the real leads
+  // instead of an arbitrary unscored slice.
   const { data: rows, error } = await supabase
     .from("batch_leads")
     .select("*")
@@ -65,7 +76,9 @@ export async function GET(req) {
     .eq("sales_status", "new")
     .eq("permit_within_10y", false)
     .neq("review_status", "rejected")
-    .limit(400); // reduced from 2000 — this project runs on the smallest free-tier compute (t4g.nano); a 2000-row scan plus its write-back burst was very likely what's been intermittently overwhelming it (a real Postgres restart showed up in the logs), not a bug in the scoring logic itself.
+    .not("year_built", "is", null)
+    .order("priority_score", { ascending: false, nullsFirst: false })
+    .limit(400);
 
   if (error) {
     return Response.json({ ok: false, error: error.message, leads: [], total: 0 }, { status: 500 });
