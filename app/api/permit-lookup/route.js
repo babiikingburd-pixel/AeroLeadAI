@@ -74,7 +74,16 @@ export async function GET(req) {
       if (!res.ok) throw new Error(`Supabase returned HTTP ${res.status}`);
       rows = await res.json();
     } catch (e) {
-      return Response.json({ ok: false, inDirectory: false, notes: "Directory lookup failed: " + e.message });
+      // FIX: this used to `return` here, so ANY directory failure hard-failed
+      // the whole lookup and SKIPPED the Shovels.ai external fallback below,
+      // even when PERMIT_API_KEY is configured. A directory failure should
+      // mean "0 rows in the directory," not "give up" — fall through instead.
+      //
+      // (An earlier note here claimed the `permits` table does not exist.
+      // It does — verified in the live schema, currently 0 rows. The
+      // fall-through is still right; the stated reason was not.)
+      rows = [];
+      directoryConfigured = false; // so notes below correctly say "not configured" rather than falsely implying it worked
     }
   }
 
@@ -91,12 +100,38 @@ export async function GET(req) {
         if (directoryConfigured) {
           try {
             const endpoint = `${url.replace(/\/$/, "")}/rest/v1/permits`;
-            await fetch(endpoint, {
+            const cacheRes = await fetch(endpoint, {
               method: "POST",
               headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-              body: JSON.stringify(rows.map((r) => ({ address, address_normalized: normalize(address), ...r, source: "shovels" }))),
+              // FIX (verified against the live database with a direct
+              // insert test): address_normalized is a GENERATED ALWAYS
+              // STORED column. Sending an explicit value for it made
+              // Postgres reject the insert with "cannot insert a
+              // non-DEFAULT value into column" -- every single time, since
+              // the empty catch below swallowed the error silently. This is
+              // why `permits` had 0 rows despite every Shovels lookup
+              // "succeeding". Postgres computes this column itself from
+              // `address` -- just don't send it.
+              body: JSON.stringify(rows.map((r) => ({ address, ...r, source: "shovels" }))),
             });
-          } catch { /* best-effort cache — a save failure shouldn't block the response */ }
+            if (!cacheRes.ok) {
+              // fetch() does NOT throw on HTTP error status codes -- only
+              // on network failures. Without this check, even a fully
+              // rejected insert (like the address_normalized bug above)
+              // never reached the catch block at all. Both bugs had to be
+              // fixed together for the cache-write to actually be visible
+              // when it fails.
+              throw new Error(`Supabase insert HTTP ${cacheRes.status}: ${(await cacheRes.text()).slice(0, 300)}`);
+            }
+          } catch (cacheErr) {
+            // Best-effort cache — a save failure shouldn't block the
+            // response to the user. But NOT silent: this exact class of
+            // bug (address_normalized above) was invisible for as long as
+            // it existed specifically because this catch used to discard
+            // the error entirely. Log it so a schema mismatch shows up in
+            // Vercel logs instead of hiding indefinitely.
+            console.error("[permit-lookup] Shovels cache-write failed:", cacheErr.message);
+          }
         }
       }
     } catch { /* external lookup is a bonus, not a requirement — fall through */ }
@@ -106,6 +141,12 @@ export async function GET(req) {
   return Response.json({
     ok: true,
     inDirectory: rows.length > 0,
+    // Whether the paid external fallback is even available. Without this,
+    // "0 records" is ambiguous from the outside — no key configured and
+    // key configured but genuinely no permits on file look identical, which
+    // makes it impossible to tell a capability gap from a real negative
+    // result. Boolean only; the key itself is never exposed.
+    externalConfigured: !!process.env.PERMIT_API_KEY,
     records: rows,
     lowPriority: !!recentPermit,
     lowPriorityReason: recentPermit ? `Permit pulled ${recentPermit.issue_date} (within 10 years) — deprioritized.` : null,

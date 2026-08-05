@@ -10,28 +10,35 @@ export async function GET() {
   const supabase = supabaseServer();
   if (!supabase) return Response.json({ ok: false, error: "Supabase not configured." }, { status: 500 });
 
-  const c = (q) => q.select("id", { count: "exact", head: true });
-  const t = () => supabase.from("batch_leads");
+  // FIX (verified against production, which was returning a 500 with
+  // "o(...).not is not a function"): filters must be chained AFTER
+  // .select(). supabase.from() returns a PostgrestQueryBuilder, which only
+  // knows select/insert/update/delete — .not()/.gt()/.eq()/.gte() live on
+  // the PostgrestFilterBuilder that .select() returns. Every filtered count
+  // here was built the other way round, so all thirteen of them threw; the
+  // unfiltered `total` was the only one that worked, and since they share
+  // one Promise.all a single rejection took the whole endpoint down.
+  const c = () => supabase.from("batch_leads").select("id", { count: "exact", head: true });
 
   try {
     const [
       total, geoValid, hasYear, hasValue, hasHail, hasWind, hasStormDate,
       permitChecked, scored, residential, commercial, score80, confirmed, rejected,
     ] = await Promise.all([
-      c(t()),
-      c(t().not("lat", "is", null).not("lon", "is", null)),
-      c(t().not("year_built", "is", null)),
-      c(t().gt("assessed_value", 0)),
-      c(t().not("hail_inches", "is", null)),
-      c(t().not("wind_mph", "is", null)),
-      c(t().not("storm_date", "is", null)),
-      c(t().not("permit_notes", "is", null)),
-      c(t().gt("priority_score", 0)),
-      c(t().eq("property_class", "likely_residential")),
-      c(t().eq("property_class", "likely_commercial")),
-      c(t().gte("priority_score", 80)),
-      c(t().eq("review_status", "approved")),
-      c(t().eq("review_status", "rejected")),
+      c(),
+      c().not("lat", "is", null).not("lon", "is", null),
+      c().not("year_built", "is", null),
+      c().gt("assessed_value", 0),
+      c().not("hail_inches", "is", null),
+      c().not("wind_mph", "is", null),
+      c().not("storm_date", "is", null),
+      c().not("permit_notes", "is", null),
+      c().gt("priority_score", 0),
+      c().eq("property_class", "likely_residential"),
+      c().eq("property_class", "likely_commercial"),
+      c().gte("priority_score", 80),
+      c().eq("review_status", "approved"),
+      c().eq("review_status", "rejected"),
     ]);
 
     const n = (r) => r.count ?? 0;

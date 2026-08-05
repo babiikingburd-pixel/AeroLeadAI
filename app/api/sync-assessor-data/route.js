@@ -64,8 +64,16 @@ export async function POST(req) {
   const { searchParams } = new URL(req.url);
   const limit = Math.min(Number(searchParams.get("limit")) || 500, 500);
 
+  // Optional: target specific leads (e.g. the current priority queue)
+  // instead of an arbitrary "missing parcel_id" batch. Used by
+  // /api/enrich/validate-all so a top-500 lead's value check actually
+  // targets that lead, not whatever 500 rows this query happens to hit.
+  let body = {};
+  try { body = await req.json(); } catch {}
+  const leadIds = Array.isArray(body.leadIds) ? body.leadIds : null;
+
   // Phase 1: resolve.
-  const { data: rows, error } = await supabase
+  let q = supabase
     .from("batch_leads")
     .select("id, address, county, lat, lon")
     .is("parcel_id", null)
@@ -73,6 +81,9 @@ export async function POST(req) {
     .not("lat", "is", null)
     .not("lon", "is", null)
     .limit(limit);
+  if (leadIds) q = q.in("id", leadIds);
+
+  const { data: rows, error } = await q;
 
   if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
   if (!rows || rows.length === 0) return Response.json({ ok: true, scanned: 0, enriched: 0, note: "No unresolved rows in the six target counties." });

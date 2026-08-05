@@ -140,19 +140,49 @@ export async function POST(req) {
     // silently only ever checking a third of the database against storm
     // events. `limit` here now means "max rows to page through", default
     // large enough to cover the whole table.
-    const PAGE_SIZE = 1000;
+    //
+    // PRIORITIZE_QUEUE MODE: storm is a bulk-only capability (see
+    // validationCapabilities.js — NOAA ships annual CSV.gz files, not a
+    // per-point API, so checking one lead on demand isn't practical). The
+    // honest way to make top-500 leads get storm-checked promptly anyway
+    // is to make the BULK pass check them first, not to fake a per-lead
+    // call. When prioritizeQueue is true, queued leads are checked before
+    // the general unordered sweep reaches them.
+    const LEAD_FIELDS = "id, lat, lon, hail_inches, wind_mph, county, year_built, permit_within_10y, permit_notes, assessed_value, review_status, replacement_cost, damage_notes, driveway_score, priority_score";
     let leads = [];
+
+    if (body.prioritizeQueue) {
+      const { data: queued, error: qErr } = await supabase
+        .from("batch_leads")
+        .select(LEAD_FIELDS)
+        .eq("enrichment_queue", "priority")
+        .not("lat", "is", null)
+        .not("lon", "is", null)
+        .order("gap_priority", { ascending: false, nullsFirst: false })
+        .order("priority_score", { ascending: false })
+        .limit(limit);
+      if (qErr) throw new Error(qErr.message);
+      leads.push(...(queued || []));
+    }
+
+    const PAGE_SIZE = 1000;
     let offset = startOffset;
+    const alreadyIncluded = new Set(leads.map((l) => l.id));
     while (leads.length < limit) {
       const { data: page, error } = await supabase
         .from("batch_leads")
-        .select("id, lat, lon, hail_inches, wind_mph, county, year_built, permit_within_10y, permit_notes, assessed_value, review_status, replacement_cost, damage_notes, driveway_score, priority_score")
+        .select(LEAD_FIELDS)
         .not("lat", "is", null)
         .not("lon", "is", null)
         .range(offset, offset + PAGE_SIZE - 1);
       if (error) throw new Error(error.message);
       if (!page?.length) break;
-      leads.push(...page);
+      for (const row of page) {
+        if (!alreadyIncluded.has(row.id)) {
+          leads.push(row);
+          alreadyIncluded.add(row.id);
+        }
+      }
       offset += PAGE_SIZE;
       if (page.length < PAGE_SIZE) break; // last page
     }

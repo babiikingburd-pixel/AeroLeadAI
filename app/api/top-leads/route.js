@@ -55,161 +55,56 @@ export async function GET(req) {
   const tier = TIER_CAPS[searchParams.get("tier")] ? searchParams.get("tier") : "candidates";
   const limit = Math.min(Number(searchParams.get("limit")) || TIER_CAPS[tier], TIER_CAPS[tier]);
 
-  // 1. Pull the working set: six target counties, unworked, no roof permit
-  //    within 10 years (the "hasn't been touched" filter from the plan).
-  //    Rejected leads are excluded here too — a human already said no.
+  // FAST PATH: this endpoint is now read-only. Scoring and validation are performed
+  // by /api/twincities/fast-cycle and /api/twincities/validation-worker. The old
+  // GET path scored 400 rows and wrote them back on every dashboard refresh.
   //
-  // FIX (verified against production): this query had no ORDER BY, so a
-  // plain .limit(400) returned whatever 400 rows Postgres's default scan
-  // order happened to surface first — which turned out to be an unbroken
-  // run of raw OSM-import rows (id LIKE 'osm-node-%'), all sitting at the
-  // schema default priority_score of 0. Ordering by priority_score desc is
-  // the actual fix: with 130k+ leads already scored above 0, the zero-score
-  // rows never reach the top 400 regardless of what else is null on them.
-  //
-  // Deliberately NOT filtering out null year_built here (an earlier version
-  // of this fix did, and it was wrong): checkEntry()'s storm-override route
-  // lets a lead earn a real score from storm evidence alone, with
-  // year_built staying null the whole time. Filtering on year_built would
-  // hide that lead from this endpoint forever even after it legitimately
-  // earns a score — leads should only ever get better, never disappear.
+  // permit_within_10y stays filtered here. checkEntry()'s storm route lets a
+  // lead enter on storm evidence alone even when a roof permit was pulled
+  // recently, so a permitted lead CAN carry a nonzero priority_score once
+  // fast-cycle persists it. Surfacing an already-re-roofed house to a roofer
+  // is the exact thing the priority-worker permit gate exists to prevent —
+  // dropping this filter when the endpoint went read-only would have quietly
+  // re-admitted them. Currently a no-op (all 152,203 rows sit at the
+  // unpopulated default false), which is precisely why it has to be here
+  // before real permit results start landing.
   const { data: rows, error } = await supabase
     .from("batch_leads")
-    .select("*")
+    .select("id,address,city,county,lat,lon,assessed_value,evidence_score,confidence_score,priority_score,human_review,review_status,evidence_categories,evidence_breakdown,validation_status,validation_score,validation_confidence,last_validated_at,scored_at")
     .in("county", TARGET_COUNTIES)
     .eq("sales_status", "new")
     .eq("permit_within_10y", false)
     .neq("review_status", "rejected")
-    .order("priority_score", { ascending: false, nullsFirst: false })
-    .limit(400);
+    .gt("priority_score", 0)
+    .order("priority_score", { ascending: false })
+    .order("confidence_score", { ascending: false, nullsFirst: false })
+    .limit(limit * 2);
 
-  if (error) {
-    return Response.json({ ok: false, error: error.message, leads: [], total: 0 }, { status: 500 });
-  }
-  if (!rows || rows.length === 0) {
-    return Response.json({ ok: true, leads: [], total: 0, tier, note: "No matching leads. Confirm batch_leads.county is populated — it's a new column and may be empty for existing rows." });
-  }
+  if (error) return Response.json({ ok: false, error: error.message, leads: [], total: 0 }, { status: 500 });
 
-  // 2. Score every lead: evidence -> confidence -> human review -> THEN
-  //    priority. Uses assessed_value/year_built/replacement_cost exactly as
-  //    they currently sit on the row — no live enrichment call here (see
-  //    the file-level note above for why that moved to sync-assessor-data).
-  const scored = rows.map((row) => {
-    const priorityInput = {
-      county: row.county,
-      yearBuilt: row.year_built,
-      permit_within_10y: row.permit_within_10y,
-      hailInches: row.hail_inches,
-      windMph: row.wind_mph,
-      assessedValue: row.assessed_value,
-      reviewStatus: row.review_status,
-      roofEstimateUsd: row.replacement_cost ?? null, // now sourced from batch_leads.replacement_cost (property_enrichment sync target)
-      // Evidence categories not yet columns on batch_leads (heavySnowRegion,
-      // treeOverhang, etc.) read from damage_notes if present, else false —
-      // never fabricated as true.
-      heavySnowRegion: row.damage_notes?.heavySnowRegion === true,
-      heavyRainRegion: row.damage_notes?.heavyRainRegion === true,
-      treeOverhang: row.damage_notes?.treeOverhang === true || (row.tree_score ?? 0) >= 50,
-      largeOverhang: row.damage_notes?.largeOverhang === true || (row.tree_score ?? 0) >= 80,
-      drivewayCrackRisk: (row.driveway_score ?? 0) >= 50,
-      gutterIndicator: row.damage_notes?.gutterIndicator === true,
-    };
+  let pool = rows || [];
+  if (tier === "review") pool = pool.filter(r => r.human_review === true);
+  if (tier === "contractor") pool = pool.filter(r => r.review_status === "approved");
+  const top = pool.slice(0, limit).map(r => ({
+    id: r.id, address: r.address, city: r.city, county: r.county,
+    lat: r.lat, lon: r.lon, assessedValue: r.assessed_value,
+    evidenceScore: r.evidence_score ?? 0, confidenceScore: r.confidence_score ?? 0,
+    priorityScore: r.priority_score ?? 0, humanReview: !!r.human_review,
+    reviewStatus: r.review_status || "pending", categories: r.evidence_categories || [],
+    breakdown: r.evidence_breakdown || {}, validationStatus: r.validation_status || "unvalidated",
+    validationScore: r.validation_score ?? 0, validationConfidence: r.validation_confidence ?? 0,
+    lastValidatedAt: r.last_validated_at, scoredAt: r.scored_at, imageUrl: null,
+  }));
 
-    const result = calculatePriority(priorityInput);
-    return { ...row, ...result };
-  });
-
-  // 3. Write the full audit trail back — evidence_breakdown answers "why
-  //    did this score X" without re-deriving anything; review_status only
-  //    advances to 'pending' the first time (never overwrites an existing
-  //    approved/rejected/contractor_sent state a human already set).
-  //    Chunked into small sequential batches rather than one large
-  //    concurrent Promise.all — this project's free-tier compute
-  //    (t4g.nano) showed signs of real resource pressure under bursts of
-  //    concurrent writes (see the row-limit comment above).
-  const enteredRows = scored.filter((r) => r.entered);
-  const WRITE_CHUNK_SIZE = 25;
-  for (let i = 0; i < enteredRows.length; i += WRITE_CHUNK_SIZE) {
-    const chunk = enteredRows.slice(i, i + WRITE_CHUNK_SIZE);
-    await Promise.all(
-      chunk.map((r) =>
-        supabase
-          .from("batch_leads")
-          .update({
-            evidence_score: r.evidenceScore,
-            evidence_categories: r.categories,
-            evidence_breakdown: r.breakdown,
-            confidence_score: r.confidenceScore,
-            priority_score: r.priorityScore,
-            human_review: r.humanReview,
-            ...(r.humanReview && !r.reviewStatus ? { review_status: "pending" } : {}),
-          })
-          .eq("id", r.id)
-      )
-    );
-  }
-
-  // 4. Apply the requested tier filter, rank, cap.
-  let pool = scored.filter((r) => r.entered && r.priorityScore > 0);
-  if (tier === "review") pool = pool.filter((r) => r.humanReview);
-  if (tier === "contractor") pool = pool.filter((r) => r.review_status === "approved" || r.reviewStatus === "approved");
-
-  const top = pool
-    .sort((a, b) => b.priorityScore - a.priorityScore)
-    .slice(0, limit)
-    .map((r) => ({
-      id: r.id,
-      address: r.address,
-      city: r.city,
-      county: r.county,
-      lat: r.lat,
-      lon: r.lon,
-      assessedValue: r.assessed_value,
-      evidenceScore: r.evidenceScore,
-      confidenceScore: r.confidenceScore,
-      priorityScore: r.priorityScore,
-      humanReview: r.humanReview,
-      reviewStatus: r.review_status || "pending",
-      categories: r.categories,
-      breakdown: r.breakdown,
-      route: r.route,
-      imageUrl: null, // filled in below when a property_images row exists; stays null otherwise
-    }));
-
-  // 5. Attach imageUrl from property_images (populated out-of-band by
-  //    /api/image-crawler) — a lead can have zero or one row here in
-  //    normal operation (the crawler skips property_ids that already have
-  //    one), but sorted by fetched_at desc and keeping the first match per
-  //    id is a cheap guard against ever showing a stale image if that
-  //    assumption changes later. Wrapped in try/catch: a failed image
-  //    lookup should never take down the leads response itself.
   try {
-    const ids = top.map((r) => r.id);
-    if (ids.length > 0) {
-      const { data: images, error: imagesError } = await supabase
-        .from("property_images")
-        .select("property_id, image_url, fetched_at")
-        .in("property_id", ids)
-        .order("fetched_at", { ascending: false });
-      if (!imagesError && images) {
-        const imageByPropertyId = new Map();
-        for (const img of images) {
-          if (!imageByPropertyId.has(img.property_id)) imageByPropertyId.set(img.property_id, img.image_url);
-        }
-        for (const lead of top) lead.imageUrl = imageByPropertyId.get(lead.id) ?? null;
-      }
+    const ids = top.map(r => r.id);
+    if (ids.length) {
+      const { data: images } = await supabase.from("property_images").select("property_id,image_url,fetched_at").in("property_id", ids).order("fetched_at", { ascending: false });
+      const byId = new Map();
+      for (const img of images || []) if (!byId.has(img.property_id)) byId.set(img.property_id, img.image_url);
+      for (const lead of top) lead.imageUrl = byId.get(lead.id) ?? null;
     }
-  } catch (err) {
-    console.warn(`[top-leads] property_images lookup failed, continuing without images: ${err.message}`);
-  }
+  } catch (err) { console.warn(`[top-leads] image lookup failed: ${err.message}`); }
 
-  return Response.json({
-    ok: true,
-    tier,
-    cap: TIER_CAPS[tier],
-    leads: top,
-    total: top.length,
-    scanned: rows.length,
-    entered: scored.filter((r) => r.entered).length,
-  });
+  return Response.json({ ok: true, tier, cap: TIER_CAPS[tier], leads: top, total: top.length, scanned: rows?.length || 0, readOnly: true, scoringPath: "/api/twincities/fast-cycle" });
 }
