@@ -205,6 +205,27 @@ export async function POST(req) {
   }
 
   const ok = results.filter((r) => r.saved);
+
+  // Self-maintaining queue: after gate-outs and completions, top the active
+  // queue back up to targetSize rather than leaving it to shrink. This is
+  // the achievable version of "continuously replace #500" on a serverless
+  // platform — no persistent loop, just: every time work happens, also ask
+  // "does the pool need refilling?" State lives in the database; there is
+  // no long-running process to keep alive.
+  let topUp = null;
+  if (body.autoTopUp !== false) {
+    try {
+      const topUpRes = await fetch(`${origin}/api/enrich/promote-queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetSize: body.targetSize ?? 500 }),
+      });
+      topUp = topUpRes.ok ? await topUpRes.json() : { ok: false, error: `HTTP ${topUpRes.status}` };
+    } catch (e) {
+      topUp = { ok: false, error: e.message };
+    }
+  }
+
   return Response.json({
     ok: true,
     workerId,
@@ -219,6 +240,7 @@ export async function POST(req) {
       images_fetched: ok.filter((r) => r.image === "fetched").length,
       save_failures: results.filter((r) => r.saved === false).length,
     },
+    topUp,
     results,
   });
 }
