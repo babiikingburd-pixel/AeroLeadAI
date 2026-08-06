@@ -1,6 +1,7 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { rankValidationBatch } from "../../../../lib/twincities/apex7Engine";
 import { chooseWork } from "../../../../lib/twincities/apex7Queue";
+import { OPEN_LEAD_VALIDATION_STATES } from "../../../../lib/twincities/validationState";
 
 export const maxDuration = 300;
 
@@ -14,10 +15,10 @@ export async function POST(req) {
     .from("batch_leads")
     .select("*")
     // The states the validation worker actually writes, plus the schema
-    // default. The previous list ("pending"/"unknown"/"needs_validation") is
+    // default. The previous list ("pending"/"unknown"/"needs_validation") was
     // written by nothing in this codebase, so this endpoint returned an empty
     // work set for all 152K leads.
-    .in("validation_status", ["unvalidated", "needs_more_evidence", "partial"])
+    .in("validation_status", OPEN_LEAD_VALIDATION_STATES)
     .order("priority_score", { ascending: false, nullsFirst: false })
     .limit(limit);
   if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });

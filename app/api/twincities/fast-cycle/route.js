@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { TC_COUNTIES, FAST_SCORE_FIELDS, scoreRow, validationPriority, buildValidationChecks } from "../../../../lib/twincities/fastCycle";
+import { ACTIVE_JOB_STATUSES, JOB_STATUS } from "../../../../lib/twincities/validationState";
 
 export const maxDuration = 60;
 
@@ -23,7 +24,9 @@ async function insertJobs(supabase, rows, limit = 1000) {
     .from("twincities_validation_jobs")
     .select("property_id")
     .in("property_id", ids)
-    .in("status", ["queued", "claimed", "running"]);
+    // Was ["queued","claimed","running"]. Nothing ever writes "claimed", so the
+    // dedupe check was matching on a state that could not exist.
+    .in("status", ACTIVE_JOB_STATUSES);
   if (activeErr) throw new Error(activeErr.message);
 
   const activeIds = new Set((active || []).map(x => String(x.property_id)));
@@ -32,7 +35,7 @@ async function insertJobs(supabase, rows, limit = 1000) {
     priority: validationPriority(r),
     requested_checks: buildValidationChecks(r),
     reason: "Twin Cities autonomous evidence-gate cycle",
-    status: "queued",
+    status: JOB_STATUS.QUEUED,
   }));
 
   let inserted = 0;
@@ -124,7 +127,7 @@ export async function POST(req) {
 
   return Response.json({
     ok: true,
-    version: "APEX9.7",
+    version: "APEX10.1",
     countyScope: TC_COUNTIES,
     eligiblePopulation: total,
     scanPage: page,

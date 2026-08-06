@@ -6,6 +6,6 @@ const required=['lib/apex/releaseTrain.js','app/apex/page.jsx','app/api/apex-sta
 let bad=0;
 for(const f of required){ if(fs.existsSync(path.join(root,f))) console.log(`PASS ${f}`); else {console.error(`FAIL ${f}`);bad++;} }
 const pkg=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
-if(pkg.version!=='1.10.0-apex10.0'){console.error('FAIL package version');bad++;} else console.log('PASS package version APEX10.0');
+if(pkg.version!=='1.10.1-apex10.1'){console.error('FAIL package version');bad++;} else console.log('PASS package version APEX10.1');
 console.log(bad?`\nAPEX release check failed: ${bad}`:'\nAPEX release check: READY');
 process.exit(bad?1:0);

@@ -1,5 +1,11 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { applyEvidenceAndRescore } from "../../../../lib/twincities/evidenceEvents";
+import {
+  EVIDENCE_STATUS,
+  IMAGE_RETRIEVAL_STATUS,
+  imageRetrievalPatch,
+} from "../../../../lib/twincities/validationState";
+import { PAID_PROVIDERS, loadControls, record, reserve } from "../../../../lib/twincities/costGuard";
 
 // PRIORITY ENRICHMENT WORKER
 //
@@ -52,6 +58,18 @@ export async function POST(req) {
   const workerId = body.workerId || `worker-${Math.random().toString(36).slice(2, 8)}`;
   const origin = new URL(req.url).origin;
 
+  // Cost guard. This worker makes a billed permit lookup and a billed imagery
+  // fetch per lead, so it refuses to start at all once the switch has tripped.
+  const controls = await loadControls(supabase);
+  if (controls.paid_lookups_enabled === false) {
+    return Response.json({
+      ok: false,
+      halted: true,
+      reason: controls.paid_lookups_disabled_reason || "paid lookups disabled",
+      disabledAt: controls.paid_lookups_disabled_at ?? null,
+    }, { status: 503 });
+  }
+
   // --- 1. CLAIM a batch ---
   // Select, then conditionally update with enrichment_status still 'pending'
   // in the WHERE clause. A second worker that grabbed the same row loses the
@@ -97,12 +115,17 @@ export async function POST(req) {
     let permitFound = null;
     let permitNotes = null;
     let permitError = null;
-    let permitStatus = "failed";
+    let permitStatus = EVIDENCE_STATUS.FAILED;
 
-    // --- 2. PERMIT LOOKUP (GET — the real lookup) ---
+    // --- 2. PERMIT LOOKUP (GET — the real lookup, and it is billed) ---
+    const permitBudget = await reserve(supabase, PAID_PROVIDERS.PERMIT, { controls });
     try {
+      if (!permitBudget.allowed) throw new Error(`cost guard: ${permitBudget.reason}`);
       const addr = `${row.address}, ${row.city}, MN`;
       const res = await fetch(`${origin}/api/permit-lookup?address=${encodeURIComponent(addr)}`);
+      await record(supabase, PAID_PROVIDERS.PERMIT, {
+        worker: workerId, leadId: row.id, ok: res.ok, detail: `HTTP ${res.status}`,
+      });
       if (res.ok) {
         const data = await res.json();
         const records = data.records || [];
@@ -115,7 +138,7 @@ export async function POST(req) {
         // 'verified' when records came back; 'none_found' when the lookup ran
         // cleanly and there genuinely is nothing. Both are real evidence.
         // Neither is 'unknown'.
-        permitStatus = records.length > 0 ? "verified" : "none_found";
+        permitStatus = records.length > 0 ? EVIDENCE_STATUS.VERIFIED : EVIDENCE_STATUS.NONE_FOUND;
         permitNotes = JSON.stringify({
           checked_at: new Date().toISOString(),
           source: data.inDirectory ? "permit_directory" : "lookup",
@@ -146,10 +169,10 @@ export async function POST(req) {
     if (gatedOut) {
       evidencePatch.enrichment_status = "complete_downranked";
       evidencePatch.enrichment_completed_at = new Date().toISOString();
-      evidencePatch.image_evidence_status = "skipped_permit_gate";
+      evidencePatch.image_evidence_status = IMAGE_RETRIEVAL_STATUS.SKIPPED_PERMIT_GATE;
     } else if (permitError) {
       evidencePatch.enrichment_status = "pending"; // failed lookup -> retryable, not a finding
-      evidencePatch.permit_evidence_status = "failed";
+      evidencePatch.permit_evidence_status = EVIDENCE_STATUS.FAILED;
     } else {
       evidencePatch.enrichment_status = "permit_done";
     }
@@ -167,16 +190,28 @@ export async function POST(req) {
     // --- 5. IMAGE (only past the permit gate) ---
     let imageStatus = gatedOut ? "skipped_permit_gate" : (permitError ? "skipped_permit_failed" : "skipped");
     if (!gatedOut && !permitError && !skipImages && row.lat != null && row.lon != null) {
-      try {
+      const imageryBudget = await reserve(supabase, PAID_PROVIDERS.IMAGERY, { controls });
+      if (!imageryBudget.allowed) {
+        imageStatus = `skipped_no_budget: ${imageryBudget.reason}`;
+        await mustUpdate(supabase, row.id, {
+          ...imageRetrievalPatch(IMAGE_RETRIEVAL_STATUS.SKIPPED_NO_BUDGET),
+          enrichment_status: "pending",
+        }, "image budget skip");
+      } else try {
         const imgRes = await fetch(`${origin}/api/imagery-agent`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ lat: row.lat, lon: row.lon, address: row.address, leadId: row.id }),
         });
+        await record(supabase, PAID_PROVIDERS.IMAGERY, {
+          worker: workerId, leadId: row.id, ok: imgRes.ok, detail: `HTTP ${imgRes.status}`,
+        });
         imageStatus = imgRes.ok ? "fetched" : `failed_${imgRes.status}`;
+        // Was image_evidence_status: "verified" on a successful FETCH. That is
+        // the APEX 9.6 mislabel 9.7 removed — the column is retrieval state
+        // only, and imageRetrievalPatch() is now the only way to write it.
         await mustUpdate(supabase, row.id, {
-          image_evidence_status: imgRes.ok ? "verified" : "failed",
-          image_fetched_at: imgRes.ok ? new Date().toISOString() : null,
+          ...imageRetrievalPatch(imgRes.ok),
           enrichment_status: imgRes.ok ? "complete" : "image_failed",
           enrichment_completed_at: imgRes.ok ? new Date().toISOString() : null,
         }, "image status save");

@@ -1,8 +1,11 @@
 {
   "product": "AeroLeadAI",
-  "release": "APEX10.0",
-  "build": "1.10.0-apex10.0",
-  "install": {"windows": "Install-AeroLeadAI.cmd", "android": "android/build-aeroleadai.sh"},
+  "release": "APEX10.1",
+  "build": "1.10.1-apex10.1",
+  "install": {
+    "windows": "Install-AeroLeadAI.cmd",
+    "android": "android/build-aeroleadai.sh"
+  },
   "releaseTrain": [
     "9.0 Foundation",
     "9.1 Evidence Fusion",
@@ -13,7 +16,14 @@
     "9.6 Mission Control",
     "9.7 Evidence Gate",
     "9.9 Evidence Fusion",
-    "10.0 Autonomous Governance"
+    "10.0 Autonomous Governance",
+    "10.1 Bounded Autonomy"
   ],
-  "verification": ["npm run doctor", "npm run verify", "npm run apex:status", "npm run apex:cycle", "npm run build"]
+  "verification": [
+    "npm run doctor",
+    "npm run verify",
+    "npm run apex:status",
+    "npm run apex:cycle",
+    "npm run build"
+  ]
 }
