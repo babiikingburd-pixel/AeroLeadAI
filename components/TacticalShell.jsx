@@ -19,6 +19,7 @@ const MODULES = [
   { href: "/intelligence", label: "Intelligence" },
   { href: "/enterprise", label: "Enterprise" },
   { href: "/executive", label: "Executive" },
+  { href: "/apex", label: "APEX Release Train" },
 ];
 
 export default function TacticalShell({ children }) {

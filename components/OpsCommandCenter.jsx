@@ -132,7 +132,7 @@ export default function OpsCommandCenter() {
 
       {!opsAvailable() && (
         <div style={{ background: PANEL, border: `1px solid ${AMBER}`, borderRadius: 8, padding: 14, marginBottom: 18, fontSize: 13, color: AMBER }}>
-          Jobs and contractors require Supabase — run <code>supabase_ops_schema.sql</code> and set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY.
+          Jobs and contractors require Supabase — run <code>supabase_ops_schema.sql</code> and set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY (or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY).
         </div>
       )}
 

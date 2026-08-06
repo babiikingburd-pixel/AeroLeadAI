@@ -575,7 +575,7 @@ export default function MassUploadConsole() {
             Paste addresses or drop images. One click runs everything: geocode → satellite imagery (roof + tree + driveway) → permit directory check (10-year rule) → damage vision across all 3 domains → ranked output.
           </p>
           <p style={{ color: supabase ? GREEN : MUTE, fontSize: 11.5, margin: "6px 0 0" }}>
-            {supabase ? "✓ Queue synced to Supabase — durable across devices/sessions." : "Queue stored locally in this browser only. Set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY (see supabase_batch_leads_schema.sql) for a durable, cross-device queue."}
+            {supabase ? "✓ Queue synced to Supabase — durable across devices/sessions." : "Queue stored locally in this browser only. Set NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY (or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) (see supabase_batch_leads_schema.sql) for a durable, cross-device queue."}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
