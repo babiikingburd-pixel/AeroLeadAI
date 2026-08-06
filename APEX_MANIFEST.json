@@ -1,0 +1,19 @@
+{
+  "product": "AeroLeadAI",
+  "release": "APEX10.0",
+  "build": "1.10.0-apex10.0",
+  "install": {"windows": "Install-AeroLeadAI.cmd", "android": "android/build-aeroleadai.sh"},
+  "releaseTrain": [
+    "9.0 Foundation",
+    "9.1 Evidence Fusion",
+    "9.2 Validation Accelerator",
+    "9.3 Acquisition Network",
+    "9.4 Safe Self-Improvement",
+    "9.5 Conversion Intelligence",
+    "9.6 Mission Control",
+    "9.7 Evidence Gate",
+    "9.9 Evidence Fusion",
+    "10.0 Autonomous Governance"
+  ],
+  "verification": ["npm run doctor", "npm run verify", "npm run apex:status", "npm run apex:cycle", "npm run build"]
+}

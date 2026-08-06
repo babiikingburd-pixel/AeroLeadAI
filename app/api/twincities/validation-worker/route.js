@@ -6,6 +6,11 @@ export const maxDuration = 60;
 const DEFAULT_LIMIT = 12;
 const MAX_LIMIT = 25;
 const CONCURRENCY = 4;
+// twincities_validation_jobs.attempts was incremented on every claim but never
+// read, so a job that failed deterministically (bad address, dead permit
+// endpoint) went straight back to "queued" and burned a worker slot — and a
+// paid permit lookup — every 15 minutes forever.
+const MAX_ATTEMPTS = 4;
 
 function auth(req) {
   const secret = process.env.CRON_SECRET;
@@ -33,17 +38,17 @@ async function permitCheck(origin, row) {
 }
 
 async function runOne(supabase, origin, row, workerId) {
-  // Independent checks run concurrently. Imagery waits only on the permit gate.
   const [permit, value] = await Promise.all([
     permitCheck(origin, row),
     enrichLeadValue({ county: row.county, lat: row.lat, lon: row.lon, address: row.address }, supabase),
   ]);
 
+  const checkedAt = new Date().toISOString();
   const patch = {
     permit_evidence_status: permit.status,
-    permit_checked_at: permit.status === "failed" ? null : new Date().toISOString(),
+    permit_checked_at: permit.status === "failed" ? null : checkedAt,
     permit_notes: permit.notes || row.permit_notes || null,
-    assessor_checked_at: value ? new Date().toISOString() : null,
+    assessor_checked_at: value ? checkedAt : null,
     value_evidence_status: value?.assessedValue ? "verified" : "unknown",
     validation_worker_id: workerId,
   };
@@ -52,43 +57,89 @@ async function runOne(supabase, origin, row, workerId) {
   if (value?.yearBuilt) patch.year_built = value.yearBuilt;
   if (value?.source) patch.value_source = value.source;
 
-  let rescored = await applyEvidenceAndRescore(supabase, row, patch, "twincities_validation_worker", {
+  const rescored = await applyEvidenceAndRescore(supabase, row, patch, "twincities_validation_worker", {
     validation: true,
     permitStatus: permit.status,
     permitFound: permit.foundRecent ?? null,
     assessorValue: value?.assessedValue ?? null,
+    workerId,
   });
 
-  let image = "skipped";
+  let image = "not_requested";
   if (permit.foundRecent !== true && permit.status !== "failed" && row.lat != null && row.lon != null) {
     try {
       const res = await fetch(`${origin}/api/imagery-agent`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lat: row.lat, lon: row.lon, address: row.address, leadId: row.id, lite: true }),
         signal: AbortSignal.timeout(12000),
       });
-      image = res.ok ? "verified" : `failed_${res.status}`;
-      await supabase.from("batch_leads").update({ image_evidence_status: res.ok ? "verified" : "failed", image_fetched_at: res.ok ? new Date().toISOString() : null }).eq("id", row.id);
+      // Fetching imagery is NOT validation. APEX 9.6 incorrectly called a
+      // successful fetch "verified". 9.7 records retrieval separately and
+      // requires an actual image review result before awarding validation points.
+      image = res.ok ? "fetched" : `failed_${res.status}`;
+      await supabase.from("batch_leads").update({
+        image_evidence_status: res.ok ? "fetched" : "failed",
+        image_fetched_at: res.ok ? checkedAt : null,
+      }).eq("id", row.id);
     } catch (e) { image = `error:${e.message}`; }
   }
 
-  const validationScore = Math.round(Math.min(100, (
-    (patch.permit_evidence_status === "verified" || patch.permit_evidence_status === "none_found" ? 30 : 0) +
-    (patch.value_evidence_status === "verified" ? 25 : 0) +
-    (row.hail_inches != null || row.wind_mph != null ? 20 : 0) +
-    (image === "verified" ? 25 : 0)
-  )) * 100) / 100;
-  const recommendation = validationScore >= 80 ? "validated" : validationScore >= 50 ? "partial" : "needs_more_evidence";
+  const stormPresent = row.hail_inches != null || row.wind_mph != null || row.storm_date != null;
+  const imageReviewStatus = row.image_review_status || "unreviewed";
+  // "reviewed" is verified OR adjudicated everywhere else in the codebase
+  // (evidenceFusion.js, apex10_rebuild_leaderboard). Scoring only "verified"
+  // here meant an adjudicated review earned no validation credit.
+  const imageReviewed = ["verified", "adjudicated"].includes(imageReviewStatus);
+
+  // Evidence completeness is deliberately different from lead quality.
+  // "Checked and nothing found" is valid coverage, but it is not a positive
+  // damage signal. An image fetch is also not a review.
+  const validationScore = Math.round((
+    (permit.status === "verified" || permit.status === "none_found" ? 20 : 0) +
+    (value?.assessedValue ? 20 : 0) +
+    (stormPresent ? 25 : 0) +
+    (image === "fetched" ? 10 : 0) +
+    (imageReviewed ? 25 : 0)
+  ) * 100) / 100;
+
+  const recommendation =
+    validationScore >= 80 && imageReviewed ? "validated" :
+    validationScore >= 50 ? "partial" : "needs_more_evidence";
+
+  const validationConfidence = Math.min(
+    100,
+    Math.round(
+      (permit.status === "verified" ? 25 : permit.status === "none_found" ? 15 : 0) +
+      (value?.assessedValue ? 25 : 0) +
+      (stormPresent ? 20 : 0) +
+      (imageReviewed ? 30 : image === "fetched" ? 5 : 0)
+    )
+  );
 
   await supabase.from("batch_leads").update({
     validation_status: recommendation,
     validation_score: validationScore,
-    validation_confidence: validationScore,
-    last_validated_at: new Date().toISOString(),
+    validation_confidence: validationConfidence,
+    last_validated_at: checkedAt,
     next_validation_at: new Date(Date.now() + (recommendation === "validated" ? 7 : 2) * 86400000).toISOString(),
+    validation_evidence_version: "APEX9.7",
   }).eq("id", row.id);
 
-  return { id: row.id, scoreBefore: row.priority_score, scoreAfter: rescored.after, delta: rescored.delta, validationScore, recommendation, image };
+  return {
+    id: row.id,
+    scoreBefore: row.priority_score,
+    scoreAfter: rescored.after,
+    delta: rescored.delta,
+    validationScore,
+    validationConfidence,
+    recommendation,
+    permitStatus: permit.status,
+    assessorVerified: !!value?.assessedValue,
+    stormPresent,
+    image,
+    imageReviewed,
+  };
 }
 
 export async function POST(req) {
@@ -101,14 +152,22 @@ export async function POST(req) {
   const origin = new URL(req.url).origin;
 
   const { data: jobs, error } = await supabase.from("twincities_validation_jobs")
-    .select("id, property_id, priority, requested_checks")
-    .eq("status", "queued").order("priority", { ascending: false }).limit(limit);
+    .select("id, property_id, priority, requested_checks, attempts")
+    .eq("status", "queued")
+    .or(`next_attempt_at.is.null,next_attempt_at.lte.${new Date().toISOString()}`)
+    .order("priority", { ascending: false })
+    .limit(limit);
   if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
   if (!jobs?.length) return Response.json({ ok: true, claimed: 0, processed: 0, note: "Twin Cities validation queue empty." });
 
   const claimed = [];
   for (const job of jobs) {
-    const { data } = await supabase.from("twincities_validation_jobs").update({ status: "running", claimed_by: workerId, claimed_at: new Date().toISOString(), attempts: (job.attempts || 0) + 1 }).eq("id", job.id).eq("status", "queued").select("id");
+    const { data } = await supabase.from("twincities_validation_jobs").update({
+      status: "running",
+      claimed_by: workerId,
+      claimed_at: new Date().toISOString(),
+      attempts: Number(job.attempts || 0) + 1
+    }).eq("id", job.id).eq("status", "queued").select("id");
     if (data?.length) claimed.push(job);
   }
 
@@ -126,12 +185,29 @@ export async function POST(req) {
         await supabase.from("twincities_validation_jobs").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", job.id);
         return { ...result, ok: true };
       } catch (e) {
-        await supabase.from("twincities_validation_jobs").update({ status: "failed", last_error: e.message, next_attempt_at: new Date(Date.now() + 15 * 60000).toISOString() }).eq("id", job.id);
-        return { id: job.property_id, ok: false, error: e.message };
+        // `attempts` was already incremented when this job was claimed.
+        const attempts = Number(job.attempts || 0) + 1;
+        const exhausted = attempts >= MAX_ATTEMPTS;
+        await supabase.from("twincities_validation_jobs").update({
+          status: exhausted ? "failed" : "queued",
+          last_error: exhausted ? `${e.message} (gave up after ${attempts} attempts)` : e.message,
+          completed_at: exhausted ? new Date().toISOString() : null,
+          next_attempt_at: exhausted ? null : new Date(Date.now() + 15 * 60000).toISOString()
+        }).eq("id", job.id);
+        return { id: job.property_id, ok: false, error: e.message, attempts, exhausted };
       }
     }));
     results.push(...batchResults);
   }
 
-  return Response.json({ ok: true, workerId, claimed: claimed.length, processed: results.length, validated: results.filter(r => r.recommendation === "validated").length, results });
+  return Response.json({
+    ok: true,
+    version: "APEX9.7",
+    workerId,
+    claimed: claimed.length,
+    processed: results.length,
+    validated: results.filter(r => r.recommendation === "validated").length,
+    partial: results.filter(r => r.recommendation === "partial").length,
+    results
+  });
 }

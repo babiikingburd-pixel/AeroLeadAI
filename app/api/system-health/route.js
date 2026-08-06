@@ -19,7 +19,19 @@ async function pingUrl(url, ms = 4000) {
 
 export async function GET() {
   const aiProvider = activeProvider();
-  const hasSupabase = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  // Must mirror supabaseServer()'s resolution order exactly, or this reports
+  // "not configured" on a deployment the rest of the app connects from
+  // perfectly well — SUPABASE_URL, SUPABASE_SECRET_KEY and SUPABASE_ANON_KEY
+  // were all missing from this check.
+  const hasSupabase = !!(
+    (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL) &&
+    (process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SECRET_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.SUPABASE_PUBLISHABLE_KEY)
+  );
   const imageryProvider = process.env.NEARMAP_API_KEY ? "nearmap" : process.env.GOOGLE_MAPS_API_KEY ? "google" : process.env.MAPBOX_TOKEN ? "mapbox" : "esri-free";
 
   const [overpassUp, nominatimUp, nwsUp] = await Promise.all([
