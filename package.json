@@ -1,6 +1,6 @@
 {
   "name": "property-intelligence-console",
-  "version": "1.13.0-apex13.0-max",
+  "version": "1.14.1-apex14.1-residential-top500",
   "private": true,
   "scripts": {
     "apex:14-audit": "node scripts/apex14-max-audit.mjs",
@@ -12,7 +12,8 @@
     "apex:status": "node scripts/apex-release-check.mjs",
     "apex:cycle": "node scripts/apex10-cycle-check.mjs",
     "apex:max-audit": "node scripts/apex11-max-audit.mjs",
-    "apex:13-audit": "node scripts/apex13-max-audit.mjs"
+    "apex:13-audit": "node scripts/apex13-max-audit.mjs",
+    "apex:14.1-network-audit": "node scripts/apex141-top500-network-audit.mjs"
   },
   "dependencies": {
     "next": "^14.2.35",

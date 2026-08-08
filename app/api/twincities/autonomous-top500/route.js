@@ -2,54 +2,43 @@ import { supabaseServer } from "../../../../lib/supabaseServer";
 
 export const maxDuration = 60;
 
+function auth(req) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return true;
+  return req.headers.get("authorization") === `Bearer ${secret}` ||
+    new URL(req.url).searchParams.get("secret") === secret;
+}
+
 export async function POST(req) {
+  if (!auth(req)) return Response.json({ok:false,error:"Unauthorized"},{status:401});
   const supabase = supabaseServer();
   if (!supabase) return Response.json({ok:false,error:"Supabase not configured."},{status:500});
-  const body = await req.json().catch(()=>({}));
-  const limit = Math.min(Number(body.limit)||10,25);
 
-  const {data: leads,error} = await supabase.from("batch_leads")
-    .select("id,address,city,county,lat,lon,priority_score,confidence_score,evidence_completeness,evidence_confidence")
-    .eq("sales_status","new")
-    .neq("review_status","rejected")
-    .order("priority_score",{ascending:false})
-    .order("evidence_completeness",{ascending:false})
-    .limit(500);
+  const origin = new URL(req.url).origin;
+  const headers = {"Content-Type":"application/json", ...(process.env.CRON_SECRET ? {Authorization:`Bearer ${process.env.CRON_SECRET}`} : {})};
+  const r = await fetch(`${origin}/api/twincities/top500-network`, {
+    method:"POST", headers, body:JSON.stringify({mode:"rebalance"})
+  });
+  const data = await r.json().catch(()=>({ok:false,error:`HTTP ${r.status}`}));
+  if (!r.ok) return Response.json(data,{status:r.status});
 
+  const {data:slots,error} = await supabase.from("top500_slots")
+    .select("slot_no,property_id,rank,score,status,residential_confidence,last_investigated_at,next_investigation_at")
+    .order("slot_no").limit(500);
   if(error) return Response.json({ok:false,error:error.message},{status:500});
-
-  const now=new Date().toISOString();
-  const rows=(leads||[]).map((x,i)=>({
-    id:x.id,
-    top500_rank:i+1,
-    top500_rank_checked_at:now,
-    evidence_pipeline_status:x.evidence_completeness>=90 ? "complete" : "needs_evidence"
-  }));
-  for(let i=0;i<rows.length;i+=50){
-    await Promise.all(rows.slice(i,i+50).map(r=>
-      supabase.from("batch_leads").update({
-        top500_rank:r.top500_rank,
-        top500_rank_checked_at:r.top500_rank_checked_at,
-        evidence_pipeline_status:r.evidence_pipeline_status
-      }).eq("id",r.id)
-    ));
-  }
-
-  const weak=(leads||[]).filter(x=>(Number(x.evidence_completeness)||0)<90).slice(0,limit);
-  for(const x of weak){
-    await supabase.from("evidence_queue").upsert({
-      property_id:x.id,
-      job_type:"complete_evidence",
-      priority:501-(x.top500_rank||500),
-      status:"queued",
-      pipeline_version:"APEX11.0"
-    },{onConflict:"property_id,job_type"});
-  }
 
   return Response.json({
     ok:true,
-    ranked:rows.length,
-    queuedForEnrichment:weak.length,
-    rule:"Top 500 is dynamically re-ranked from persisted evidence; incomplete candidates are queued for enrichment."
+    version:"APEX14.1",
+    ...data,
+    residentialTop500:slots||[],
+    contractorReadySlots:(slots||[]).filter(s=>s.status==="occupied").length
   });
+}
+
+export async function GET(req) {
+  const supabase = supabaseServer();
+  if(!supabase) return Response.json({ok:false,error:"Supabase not configured."},{status:500});
+  const {data:slots,error}=await supabase.from("top500_slots").select("*").order("slot_no").limit(500);
+  return Response.json({ok:!error,version:"APEX14.1",slots:slots||[],error:error?.message||null});
 }

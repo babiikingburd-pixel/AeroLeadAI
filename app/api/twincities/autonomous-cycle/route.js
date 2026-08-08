@@ -25,7 +25,16 @@ export async function POST(req) {
   const scoring = await cycle("/api/twincities/fast-cycle", { scanLimit: 1000, challengerLimit: 750 });
   const validation = await cycle("/api/twincities/validation-worker", { limit: 12 });
 
-  // Re-read the current cutoff after validation so the next cycle's queue is
+  // APEX 14.1: Top-500 is now a persistent investigation workforce.
+  // Rebalance first so slots always compete, then execute a small slice of
+  // the durable crawler network. External workers can call this continuously.
+  const top500Network = await cycle("/api/twincities/top500-network", {
+    mode: "cycle",
+    limit: 4,
+    workerId: `cycle-${Date.now()}`
+  });
+
+  // Re-read the current cutoff after validation/network work so the next cycle's queue is
   // driven by the new scores rather than the pre-validation ranking.
   const { data: top } = await supabase.from("batch_leads")
     .select("id,priority_score,confidence_score,validation_status")
@@ -33,7 +42,7 @@ export async function POST(req) {
     .eq("sales_status", "new").neq("review_status", "rejected")
     .order("priority_score", { ascending: false }).limit(500);
 
-  return Response.json({ ok: true, cycleStarted, scoring, validation, currentTop500: top?.length || 0, cutoffScore: top?.[499]?.priority_score ?? null, cycleFinished: new Date().toISOString() });
+  return Response.json({ ok: true, version: "APEX14.1", cycleStarted, scoring, validation, top500Network, currentTop500: top?.length || 0, cutoffScore: top?.[499]?.priority_score ?? null, cycleFinished: new Date().toISOString() });
 }
 
 export async function GET(req) { return POST(req); }
