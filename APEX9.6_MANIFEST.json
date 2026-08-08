@@ -1,0 +1,8 @@
+{
+  "product": "AeroLeadAI",
+  "release": "APEX9.6",
+  "build": "1.6.0-apex9.6",
+  "install": {"windows": "Install-AeroLeadAI.cmd", "android": "android/build-aeroleadai.sh"},
+  "releaseTrain": ["9.0 Foundation","9.1 Evidence Fusion","9.2 Validation Accelerator","9.3 Acquisition Network","9.4 Safe Self-Improvement","9.5 Conversion Intelligence","9.6 Mission Control"],
+  "verification": ["npm run doctor","npm run verify","npm run apex:status","npm run build"]
+}

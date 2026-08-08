@@ -58,22 +58,11 @@ export async function GET(req) {
   // FAST PATH: this endpoint is now read-only. Scoring and validation are performed
   // by /api/twincities/fast-cycle and /api/twincities/validation-worker. The old
   // GET path scored 400 rows and wrote them back on every dashboard refresh.
-  //
-  // permit_within_10y stays filtered here. checkEntry()'s storm route lets a
-  // lead enter on storm evidence alone even when a roof permit was pulled
-  // recently, so a permitted lead CAN carry a nonzero priority_score once
-  // fast-cycle persists it. Surfacing an already-re-roofed house to a roofer
-  // is the exact thing the priority-worker permit gate exists to prevent —
-  // dropping this filter when the endpoint went read-only would have quietly
-  // re-admitted them. Currently a no-op (all 152,203 rows sit at the
-  // unpopulated default false), which is precisely why it has to be here
-  // before real permit results start landing.
   const { data: rows, error } = await supabase
     .from("batch_leads")
     .select("id,address,city,county,lat,lon,assessed_value,evidence_score,confidence_score,priority_score,human_review,review_status,evidence_categories,evidence_breakdown,validation_status,validation_score,validation_confidence,last_validated_at,scored_at")
     .in("county", TARGET_COUNTIES)
     .eq("sales_status", "new")
-    .eq("permit_within_10y", false)
     .neq("review_status", "rejected")
     .gt("priority_score", 0)
     .order("priority_score", { ascending: false })

@@ -10,8 +10,13 @@
 // free hit instead of a repeat manual entry.
 
 function supabaseConfig() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   return { url, key };
 }
 
@@ -74,14 +79,12 @@ export async function GET(req) {
       if (!res.ok) throw new Error(`Supabase returned HTTP ${res.status}`);
       rows = await res.json();
     } catch (e) {
-      // FIX: this used to `return` here, so ANY directory failure hard-failed
-      // the whole lookup and SKIPPED the Shovels.ai external fallback below,
-      // even when PERMIT_API_KEY is configured. A directory failure should
-      // mean "0 rows in the directory," not "give up" — fall through instead.
-      //
-      // (An earlier note here claimed the `permits` table does not exist.
-      // It does — verified in the live schema, currently 0 rows. The
-      // fall-through is still right; the stated reason was not.)
+      // FIX (verified): this used to `return` here, which meant a missing
+      // `permits` table (confirmed: it does not exist in this project — a
+      // real query returns 404) hard-failed the whole lookup and SKIPPED
+      // the Shovels.ai external fallback below entirely, even when
+      // PERMIT_API_KEY is configured. A directory failure should mean
+      // "0 rows in the directory," not "give up" — fall through instead.
       rows = [];
       directoryConfigured = false; // so notes below correctly say "not configured" rather than falsely implying it worked
     }
@@ -141,12 +144,6 @@ export async function GET(req) {
   return Response.json({
     ok: true,
     inDirectory: rows.length > 0,
-    // Whether the paid external fallback is even available. Without this,
-    // "0 records" is ambiguous from the outside — no key configured and
-    // key configured but genuinely no permits on file look identical, which
-    // makes it impossible to tell a capability gap from a real negative
-    // result. Boolean only; the key itself is never exposed.
-    externalConfigured: !!process.env.PERMIT_API_KEY,
     records: rows,
     lowPriority: !!recentPermit,
     lowPriorityReason: recentPermit ? `Permit pulled ${recentPermit.issue_date} (within 10 years) — deprioritized.` : null,

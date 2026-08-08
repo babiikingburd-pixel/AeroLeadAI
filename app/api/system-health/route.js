@@ -19,7 +19,7 @@ async function pingUrl(url, ms = 4000) {
 
 export async function GET() {
   const aiProvider = activeProvider();
-  const hasSupabase = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  const hasSupabase = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY));
   const imageryProvider = process.env.NEARMAP_API_KEY ? "nearmap" : process.env.GOOGLE_MAPS_API_KEY ? "google" : process.env.MAPBOX_TOKEN ? "mapbox" : "esri-free";
 
   const [overpassUp, nominatimUp, nwsUp] = await Promise.all([
