@@ -7,18 +7,21 @@ const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 25;
 const CANDIDATE_BUFFER = 6;
 
-async function fetchImageBuffer(url, timeoutMs = 9000) {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+async function fetchImageBuffer(url, timeoutMs = 9000, retries = 1) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
     const contentType = res.headers.get("content-type") || "image/jpeg";
     if (!contentType.startsWith("image/")) return null;
     const buffer = Buffer.from(await res.arrayBuffer());
     if (buffer.length < 1000) return null;
-    return { buffer, contentType };
-  } catch (_) {
-    return null;
+      return { buffer, contentType };
+    } catch (_) {
+      if (attempt < retries) await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+    }
   }
+  return null;
 }
 
 async function tryGoogle(lat, lon, key) {
@@ -45,18 +48,20 @@ async function tryEsri(lat, lon) {
 // Race providers instead of serially waiting on a dead/slow provider.
 // The first valid image wins the fast path; its source is persisted immediately.
 async function fetchPropertyImage(lat, lon, googleKey, mapboxKey) {
-  let pending = [
+  const attempts = [
     tryGoogle(lat, lon, googleKey),
     tryMapbox(lat, lon, mapboxKey),
     tryEsri(lat, lon),
-  ].map((p, id) => ({ id, promise: p.then(v => ({ id, v })).catch(() => ({ id, v: null })) }));
+  ].map(promise =>
+    promise.then(result => result || Promise.reject(new Error("empty image result")))
+  );
 
-  while (pending.length) {
-    const winner = await Promise.race(pending.map(p => p.promise));
-    if (winner.v) return winner.v;
-    pending = pending.filter(p => p.id !== winner.id);
+  try {
+    // First VALID image wins. Failed/empty providers do not block the others.
+    return await Promise.any(attempts);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export async function GET(req) {
@@ -91,7 +96,11 @@ export async function GET(req) {
   if (alreadyError) return Response.json({ ok: false, error: alreadyError.message }, { status: 500 });
 
   const doneIds = new Set((already || []).map(r => r.property_id));
-  const rows = (candidates || []).filter(r => !doneIds.has(r.id)).slice(0, limit);
+  const rows = (candidates || [])
+    .filter(r => !doneIds.has(r.id))
+    .filter(r => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)))
+    .filter(r => Math.abs(Number(r.lat)) <= 90 && Math.abs(Number(r.lon)) <= 180)
+    .slice(0, limit);
 
   if (!rows.length) {
     return Response.json({ ok: true, processed: 0, google: 0, mapbox: 0, esri: 0, failed: 0, note: "Top-ranked candidates in this batch already have imagery." });

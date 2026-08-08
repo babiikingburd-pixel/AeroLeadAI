@@ -27,7 +27,7 @@ async function permitCheck(origin, row) {
     return {
       status: records.length ? "verified" : "none_found",
       foundRecent: recent.length > 0,
-      notes: JSON.stringify({ checked_at: new Date().toISOString(), records: records.length, roof_permits: roof.length, recent_roof_permits: recent.length, source: data.inDirectory ? "directory" : "external" }),
+      notes: JSON.stringify({ checked_at: new Date().toISOString(), records: records.length, records_detail: records, roof_permits: roof.length, recent_roof_permits: recent.length, source: data.inDirectory ? "directory" : "external" }),
     };
   } catch (e) { return { status: "failed", error: e.message }; }
 }
@@ -43,7 +43,11 @@ async function runOne(supabase, origin, row, workerId) {
     permit_evidence_status: permit.status,
     permit_checked_at: permit.status === "failed" ? null : checkedAt,
     permit_notes: permit.notes || row.permit_notes || null,
-    permit_history_count: permit.notes ? (JSON.parse(permit.notes).records || 0) : (row.permit_history_count || 0),
+    permit_history: permit.notes ? (() => { try { return JSON.parse(permit.notes).records_detail || []; } catch { return row.permit_history || []; } })() : (row.permit_history || []),
+    permit_history_count: (() => {
+      try { return permit.notes ? (JSON.parse(permit.notes).records || 0) : (row.permit_history_count || 0); }
+      catch { return row.permit_history_count || 0; }
+    })(),
     assessor_checked_at: value ? checkedAt : null,
     value_evidence_status: value?.assessedValue ? "verified" : "unknown",
     validation_worker_id: workerId,

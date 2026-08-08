@@ -76,6 +76,7 @@ export async function POST(req) {
 
     const patch = {
       permit_evidence_status: permit.ok ? (records.length ? "verified" : "none_found") : "unknown",
+      permitChecked: permit.ok,
       permit_checked_at: permit.ok ? started : null,
       permit_notes: JSON.stringify({
         checked_at: started,

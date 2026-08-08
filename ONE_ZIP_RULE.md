@@ -1,7 +1,2 @@
-# One-ZIP cumulative build rule
-
-The latest ZIP is the only ZIP required. It contains the complete runnable codebase and all prior implemented functionality.
-
-Do not install 10.3, then 10.4, etc. Use the latest ZIP and apply its included cumulative SQL migrations in order if the database has not already been migrated.
-
-APEX 11.0 is the cumulative endpoint for 10.3 through 11.0.
+# ONE-ZIP RULE
+APEX 14.0 MAX is cumulative from 13.0 MAX and all earlier functionality contained in that release. Future releases must build on this ZIP rather than restarting from an earlier baseline.
