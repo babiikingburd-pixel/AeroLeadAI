@@ -88,9 +88,17 @@ export async function GET(req) {
   try {
     const ids = top.map(r => r.id);
     if (ids.length) {
-      const { data: images } = await supabase.from("property_images").select("property_id,image_url,fetched_at").in("property_id", ids).order("fetched_at", { ascending: false });
+      const { data: images } = await supabase
+        .from("property_images")
+        .select("property_id,image_url,enhanced_image_url,original_image_url,provider,quality_score,fetched_at,image_kind")
+        .in("property_id", ids)
+        .order("fetched_at", { ascending: false });
       const byId = new Map();
-      for (const img of images || []) if (!byId.has(img.property_id)) byId.set(img.property_id, img.image_url);
+      for (const img of images || []) {
+        if (!byId.has(img.property_id)) {
+          byId.set(img.property_id, img.enhanced_image_url || img.image_url || img.original_image_url || null);
+        }
+      }
       for (const lead of top) lead.imageUrl = byId.get(lead.id) ?? null;
     }
   } catch (err) { console.warn(`[top-leads] image lookup failed: ${err.message}`); }

@@ -123,6 +123,30 @@ export default function TwinCitiesPriorityPage() {
     }
   }
 
+  async function runEvidenceCycle() {
+    setCrawling(true);
+    setCrawlStatus({ ok: true, message: "Solidifying Top-500 evidence: imagery + permits + weather + rescoring…" });
+    try {
+      const res = await fetch("/api/twincities/evidence-cycle", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ limit: 8 }),
+      });
+      const data = await res.json();
+      setCrawlStatus({
+        ok: !!data.ok,
+        message: data.ok
+          ? `Evidence cycle processed ${data.processed}. Permits, weather and imagery persisted; rescoring triggered.`
+          : (data.error || "Evidence cycle failed."),
+      });
+      if (data.ok) await load(tier);
+    } catch (e) {
+      setCrawlStatus({ ok: false, message: e.message });
+    } finally {
+      setCrawling(false);
+    }
+  }
+
   async function exportToContractor() {
     const leadIds = Object.keys(selected).filter((id) => selected[id]);
     if (!contractorName.trim() || leadIds.length === 0) {
@@ -185,11 +209,18 @@ export default function TwinCitiesPriorityPage() {
           🎯 APEX 10 Report
         </button>
         <button
+          onClick={runEvidenceCycle}
+          disabled={crawling}
+          style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.cyan}`, background: "rgba(95,224,255,0.08)", color: HUD.cyan, opacity: crawling ? 0.6 : 1 }}
+        >
+          {crawling ? "🧠 Solidifying…" : "🧠 Solidify Top 500"}
+        </button>
+        <button
           onClick={fetchImages}
           disabled={crawling}
           style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.amber, opacity: crawling ? 0.6 : 1 }}
         >
-          {crawling ? "📷 Fetching…" : "📷 Fetch Images (next 25)"}
+          {crawling ? "📷 Fetching Top 500…" : "📷 Top-500 Images (next 25)"}
         </button>
       </div>
 

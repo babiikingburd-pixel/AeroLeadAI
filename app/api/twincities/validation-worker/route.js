@@ -43,6 +43,7 @@ async function runOne(supabase, origin, row, workerId) {
     permit_evidence_status: permit.status,
     permit_checked_at: permit.status === "failed" ? null : checkedAt,
     permit_notes: permit.notes || row.permit_notes || null,
+    permit_history_count: permit.notes ? (JSON.parse(permit.notes).records || 0) : (row.permit_history_count || 0),
     assessor_checked_at: value ? checkedAt : null,
     value_evidence_status: value?.assessedValue ? "verified" : "unknown",
     validation_worker_id: workerId,
@@ -62,7 +63,9 @@ async function runOne(supabase, origin, row, workerId) {
 
   let image = "not_requested";
   let imageReviewed = false;
-  if (permit.foundRecent !== true && permit.status !== "failed" && row.lat != null && row.lon != null) {
+  // Imagery is evidence in its own right. A recent permit must NOT prevent
+  // us from acquiring the property/roof/driveway evidence.
+  if (permit.status !== "failed" && row.lat != null && row.lon != null) {
     try {
       const res = await fetch(`${origin}/api/imagery-agent`, {
         method: "POST",
