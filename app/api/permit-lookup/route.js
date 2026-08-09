@@ -144,6 +144,10 @@ export async function GET(req) {
   return Response.json({
     ok: true,
     inDirectory: rows.length > 0,
+    // Distinguishes "no key set, so the paid lookup never ran" from "the
+    // paid lookup ran and genuinely found nothing" — both looked identical
+    // from outside the deployment without this.
+    externalConfigured: !!process.env.PERMIT_API_KEY,
     records: rows,
     lowPriority: !!recentPermit,
     lowPriorityReason: recentPermit ? `Permit pulled ${recentPermit.issue_date} (within 10 years) — deprioritized.` : null,
