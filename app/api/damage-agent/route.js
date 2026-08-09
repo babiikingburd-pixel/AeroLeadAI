@@ -62,7 +62,13 @@ Respond ONLY with JSON, no preamble, no markdown fences:
     try {
       parsed = JSON.parse(clean);
     } catch {
-      parsed = { concern_score: 0, indicators: [], confidence: "low", notes: "Could not parse analyst response." };
+      // parse_error is additive only — every existing field stays exactly as
+      // before (concern_score:0 etc.) so no current caller breaks. It exists
+      // because a parse failure was otherwise indistinguishable from a real
+      // "zero concern" finding: nothing in the old shape said this was a
+      // failure, not an analysis. Callers doing bulk/automated writes must
+      // check this before treating the response as a verified result.
+      parsed = { concern_score: 0, indicators: [], confidence: "low", notes: "Could not parse analyst response.", parse_error: true };
     }
     const level = parsed.concern_score >= 75 ? "severe" : parsed.concern_score >= 50 ? "high" : parsed.concern_score >= 25 ? "moderate" : "low";
     return Response.json({ ...parsed, level, provider });
