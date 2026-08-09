@@ -45,6 +45,17 @@ const TARGET_COUNTIES = SUPPORTED_COUNTIES; // hennepin, ramsey, dakota, scott, 
 
 const TIER_CAPS = { candidates: 500, review: 100, contractor: 20 };
 
+// Same free, keyless Esri World Imagery export used server-side as the
+// last-resort provider in imagery-agent/route.js's tryEsri() — reused here
+// directly as a client-renderable URL so every lead shows a real satellite
+// photo even before it's gone through (paid) imagery-agent enrichment.
+// imageIsFallback distinguishes this from a real fetched/reviewed photo —
+// never let a placeholder look identical to actual evidence.
+function freeSatelliteFallback(lat, lon) {
+  const d = 0.0004; // ~90m box, matches tryEsri's tight overview
+  return `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - d},${lat - d},${lon + d},${lat + d}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&f=image`;
+}
+
 export async function GET(req) {
   const supabase = supabaseServer();
   if (!supabase) {
@@ -82,7 +93,7 @@ export async function GET(req) {
     reviewStatus: r.review_status || "pending", categories: r.evidence_categories || [],
     breakdown: r.evidence_breakdown || {}, validationStatus: r.validation_status || "unvalidated",
     validationScore: r.validation_score ?? 0, validationConfidence: r.validation_confidence ?? 0,
-    lastValidatedAt: r.last_validated_at, scoredAt: r.scored_at, imageUrl: null,
+    lastValidatedAt: r.last_validated_at, scoredAt: r.scored_at, imageUrl: null, imageIsFallback: false,
   }));
 
   try {
@@ -99,9 +110,22 @@ export async function GET(req) {
           byId.set(img.property_id, img.enhanced_image_url || img.image_url || img.original_image_url || null);
         }
       }
-      for (const lead of top) lead.imageUrl = byId.get(lead.id) ?? null;
+      for (const lead of top) {
+        const cached = byId.get(lead.id);
+        if (cached) lead.imageUrl = cached;
+      }
     }
   } catch (err) { console.warn(`[top-leads] image lookup failed: ${err.message}`); }
+
+  // Every lead gets a real photo one way or another: a cached/reviewed
+  // fetch if one exists, otherwise the free Esri satellite export so the
+  // dashboard never shows a blank image tile.
+  for (const lead of top) {
+    if (!lead.imageUrl && lead.lat != null && lead.lon != null) {
+      lead.imageUrl = freeSatelliteFallback(lead.lat, lead.lon);
+      lead.imageIsFallback = true;
+    }
+  }
 
   return Response.json({ ok: true, tier, cap: TIER_CAPS[tier], leads: top, total: top.length, scanned: rows?.length || 0, readOnly: true, scoringPath: "/api/twincities/fast-cycle" });
 }
