@@ -10,28 +10,30 @@ export async function GET() {
   const supabase = supabaseServer();
   if (!supabase) return Response.json({ ok: false, error: "Supabase not configured." }, { status: 500 });
 
-  const c = (q) => q.select("id", { count: "exact", head: true });
-  const t = () => supabase.from("batch_leads");
+  // .not()/.gt()/.eq()/.gte() only exist on the PostgrestFilterBuilder that
+  // .select() returns — not on the bare PostgrestQueryBuilder from .from().
+  // Filters must chain AFTER select(), not before it.
+  const t = () => supabase.from("batch_leads").select("id", { count: "exact", head: true });
 
   try {
     const [
       total, geoValid, hasYear, hasValue, hasHail, hasWind, hasStormDate,
       permitChecked, scored, residential, commercial, score80, confirmed, rejected,
     ] = await Promise.all([
-      c(t()),
-      c(t().not("lat", "is", null).not("lon", "is", null)),
-      c(t().not("year_built", "is", null)),
-      c(t().gt("assessed_value", 0)),
-      c(t().not("hail_inches", "is", null)),
-      c(t().not("wind_mph", "is", null)),
-      c(t().not("storm_date", "is", null)),
-      c(t().not("permit_notes", "is", null)),
-      c(t().gt("priority_score", 0)),
-      c(t().eq("property_class", "likely_residential")),
-      c(t().eq("property_class", "likely_commercial")),
-      c(t().gte("priority_score", 80)),
-      c(t().eq("review_status", "approved")),
-      c(t().eq("review_status", "rejected")),
+      t(),
+      t().not("lat", "is", null).not("lon", "is", null),
+      t().not("year_built", "is", null),
+      t().gt("assessed_value", 0),
+      t().not("hail_inches", "is", null),
+      t().not("wind_mph", "is", null),
+      t().not("storm_date", "is", null),
+      t().not("permit_notes", "is", null),
+      t().gt("priority_score", 0),
+      t().eq("property_class", "likely_residential"),
+      t().eq("property_class", "likely_commercial"),
+      t().gte("priority_score", 80),
+      t().eq("review_status", "approved"),
+      t().eq("review_status", "rejected"),
     ]);
 
     const n = (r) => r.count ?? 0;
