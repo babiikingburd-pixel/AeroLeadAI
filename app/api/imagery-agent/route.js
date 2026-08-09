@@ -146,7 +146,13 @@ async function getStreetViewMeta(lat, lon, key) {
 // providers and there's no street-view equivalent.
 async function tryEsri(lat, lon) {
   const result = { angles: {}, resolution: {}, notes: [] };
-  const d = 0.0004, dCtx = 0.0015; // tight parcel view (~90m box), wider context view
+  // Verified against the live endpoint: below ~0.0007 degrees ArcGIS
+  // rejects the export outright with a 500 ("Error: bytes") — the bbox is
+  // too small relative to the 640x640 output size. 0.0008 is the smallest
+  // delta confirmed to reliably return a real image; this "tight" shot was
+  // silently failing every call at the old 0.0004 and falling through to
+  // the context shot only.
+  const d = 0.0008, dCtx = 0.0015; // tight parcel view (~180m box), wider context view
   const esri = (delta) => `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - delta},${lat - delta},${lon + delta},${lat + delta}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&compressionQuality=70&f=image`;
   const mppFor = (delta) => haversineMeters(lat - delta, lon, lat + delta, lon) / 640;
   const tight = await fetchAsDataUrl(esri(d), 2);
