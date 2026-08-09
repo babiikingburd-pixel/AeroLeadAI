@@ -52,7 +52,12 @@ const TIER_CAPS = { candidates: 500, review: 100, contractor: 20 };
 // imageIsFallback distinguishes this from a real fetched/reviewed photo —
 // never let a placeholder look identical to actual evidence.
 function freeSatelliteFallback(lat, lon) {
-  const d = 0.0004; // ~90m box, matches tryEsri's tight overview
+  // Verified against the live Esri export endpoint: deltas below ~0.0007
+  // degrees make ArcGIS reject the request outright with a 500 ("Error:
+  // bytes") — the bbox is too small relative to the 640x640 output size.
+  // 0.0008 (~180m box) is the smallest delta confirmed to reliably return
+  // a real image across multiple Twin Cities test points.
+  const d = 0.0008;
   return `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - d},${lat - d},${lon + d},${lat + d}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&f=image`;
 }
 
