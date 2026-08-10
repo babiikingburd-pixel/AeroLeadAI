@@ -283,7 +283,22 @@ export default function TwinCitiesPriorityPage() {
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 700 }}>{lead.address}</div>
-                <div style={{ fontSize: 11, color: HUD.muted }}>{lead.city} · {COUNTY_LABEL[lead.county] || lead.county} County</div>
+                <div style={{ fontSize: 11, color: HUD.muted }}>
+                  {lead.city} · {COUNTY_LABEL[lead.county] || lead.county} County
+                  {lead.streetViewUrl && (
+                    <>
+                      {" · "}
+                      <a
+                        href={lead.streetViewUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: HUD.cyan, fontWeight: 700, textDecoration: "none" }}
+                      >
+                        Street View ↗
+                      </a>
+                    </>
+                  )}
+                </div>
               </div>
               <div style={{ textAlign: "right", fontSize: 11, color: HUD.muted }}>
                 Evidence <span style={{ color: HUD.ice, fontWeight: 700 }}>{lead.evidenceScore}</span> · Confidence <span style={{ color: HUD.ice, fontWeight: 700 }}>{lead.confidenceScore}%</span>

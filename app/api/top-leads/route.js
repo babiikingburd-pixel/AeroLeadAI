@@ -51,6 +51,15 @@ const TIER_CAPS = { candidates: 500, review: 100, contractor: 20 };
 // photo even before it's gone through (paid) imagery-agent enrichment.
 // imageIsFallback distinguishes this from a real fetched/reviewed photo —
 // never let a placeholder look identical to actual evidence.
+// Free, keyless deep link into Google's own consumer Street View UI —
+// the same "time travel" feature a human can browse by hand, just linked
+// directly to this property's coordinates instead of making them search.
+// No API key, no billing account, no image fetched or stored server-side —
+// this only ever opens Google's site in the reviewer's own browser.
+function streetViewUrl(lat, lon) {
+  return `https://www.google.com/maps?layer=c&cbll=${lat},${lon}`;
+}
+
 function freeSatelliteFallback(lat, lon) {
   // Verified against the live Esri export endpoint: deltas below ~0.0007
   // degrees make ArcGIS reject the request outright with a 500 ("Error:
@@ -99,6 +108,7 @@ export async function GET(req) {
     breakdown: r.evidence_breakdown || {}, validationStatus: r.validation_status || "unvalidated",
     validationScore: r.validation_score ?? 0, validationConfidence: r.validation_confidence ?? 0,
     lastValidatedAt: r.last_validated_at, scoredAt: r.scored_at, imageUrl: null, imageIsFallback: false,
+    streetViewUrl: r.lat != null && r.lon != null ? streetViewUrl(r.lat, r.lon) : null,
   }));
 
   try {
