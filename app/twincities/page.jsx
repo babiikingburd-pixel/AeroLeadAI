@@ -102,6 +102,25 @@ export default function TwinCitiesPriorityPage() {
     setSelected((cur) => ({ ...cur, [id]: !cur[id] }));
   }
 
+  const [uploadingId, setUploadingId] = useState(null);
+
+  async function uploadOwnPhoto(id, file) {
+    if (!file) return;
+    setUploadingId(id);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("propertyId", id);
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const data = await res.json();
+      if (data.success && data.url) {
+        setLeads((cur) => cur.map((l) => (l.id === id ? { ...l, imageUrl: data.url, imageIsFallback: false } : l)));
+      }
+    } finally {
+      setUploadingId(null);
+    }
+  }
+
   async function fetchImages() {
     setCrawling(true);
     setCrawlStatus(null);
@@ -298,6 +317,17 @@ export default function TwinCitiesPriorityPage() {
                       </a>
                     </>
                   )}
+                  {" · "}
+                  <label style={{ color: HUD.green, fontWeight: 700, cursor: uploadingId === lead.id ? "default" : "pointer" }}>
+                    {uploadingId === lead.id ? "Uploading…" : "Save my own photo"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      style={{ display: "none" }}
+                      disabled={uploadingId === lead.id}
+                      onChange={(e) => uploadOwnPhoto(lead.id, e.target.files?.[0])}
+                    />
+                  </label>
                 </div>
               </div>
               <div style={{ textAlign: "right", fontSize: 11, color: HUD.muted }}>

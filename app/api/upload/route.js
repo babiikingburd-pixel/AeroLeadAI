@@ -34,8 +34,28 @@ export async function POST(req) {
     }
 
     const { data } = supabaseAdmin.storage.from("property-images").getPublicUrl(path);
+    const publicUrl = data?.publicUrl ?? null;
 
-    return Response.json({ success: true, url: data?.publicUrl ?? null, propertyId });
+    // Register the upload in property_images so it's actually picked up as
+    // the lead's shown image (top-leads reads this table, newest first) —
+    // a manually-saved photo that never reaches this table is invisible to
+    // the rest of the app no matter how successfully it uploaded.
+    let registered = false;
+    if (publicUrl && propertyId !== "unknown") {
+      const { error: insertError } = await supabaseAdmin.from("property_images").insert({
+        property_id: propertyId,
+        provider: "manual_upload",
+        storage_path: path,
+        image_url: publicUrl,
+        image_kind: "user_uploaded",
+        quality_score: 100,
+        evidence_status: "verified",
+        fetched_at: new Date().toISOString(),
+      });
+      registered = !insertError;
+    }
+
+    return Response.json({ success: true, url: publicUrl, propertyId, registered });
   } catch (e) {
     return Response.json({ success: false, error: e.message }, { status: 500 });
   }
