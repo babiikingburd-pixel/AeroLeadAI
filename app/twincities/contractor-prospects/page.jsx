@@ -9,7 +9,10 @@ export default function ContractorProspectsPage() {
   const pitch = selected ? `Hi, I’m local and I built a Twin Cities property/storm intelligence system for roofing companies. I’m testing it with a small group of local contractors and built a territory-specific report for ${selected.business_name}. It identifies properties that are worth an inspection based on documented storm/property signals — not claims of confirmed damage. I’d like to show you 10 opportunities in your service area and let you judge whether they’re useful. If they produce real inspections, we can discuss a small paid pilot and territory exclusivity.` : "";
   return <div style={{minHeight:"100vh",background:HUD.bg,color:HUD.ice,fontFamily:HUD.fontMono,padding:24}}>
     <a href="/twincities" style={{color:HUD.cyan}}>← Twin Cities Engine</a>
-    <h1 style={{color:HUD.cyan,fontFamily:HUD.fontDisplay}}>CONTRACTOR PROSPECT BENCH</h1>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:12}}>
+      <h1 style={{color:HUD.cyan,fontFamily:HUD.fontDisplay}}>CONTRACTOR PROSPECT BENCH</h1>
+      <a href="/twincities/contractor-prospects/add" style={{padding:"9px 16px",border:`1px solid ${HUD.amber}`,color:HUD.amber,borderRadius:4,textDecoration:"none",fontSize:12,fontWeight:700}}>+ Add Contractor (Deep Search) →</a>
+    </div>
     <p style={{color:HUD.muted,fontSize:12}}>Prospects are outreach targets only. They are not onboarded or verified contractors.</p>
     {loading && <div>Loading…</div>}
     {!selected && <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12}}>{prospects.map((p,i)=><div key={p.business_name} style={{border:`1px solid ${HUD.lineDim}`,padding:14,borderRadius:6}}><div style={{fontWeight:800,color:HUD.ice}}>{i+1}. {p.business_name}</div><div style={{color:HUD.green,margin:"8px 0"}}>Pitch fit: {p.prospect_score}/100</div><div style={{color:HUD.muted,fontSize:11}}>Target cities: {(p.service_area_cities||[]).join(", ")}</div><button onClick={()=>load(p.business_name)} style={{marginTop:12,padding:"8px 12px",background:"transparent",border:`1px solid ${HUD.amber}`,color:HUD.amber,borderRadius:4,cursor:"pointer"}}>Generate Pitch + 10 →</button></div>)}</div>}
