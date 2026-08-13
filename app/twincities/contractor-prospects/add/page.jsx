@@ -8,6 +8,8 @@ export default function AddContractorPage() {
   const [website, setWebsite] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [leads, setLeads] = useState(null);
+  const [leadsBusy, setLeadsBusy] = useState(false);
   const [error, setError] = useState(null);
 
   async function runDeepSearch() {
@@ -18,6 +20,7 @@ export default function AddContractorPage() {
     setBusy(true);
     setError(null);
     setResult(null);
+    setLeads(null);
     try {
       const res = await fetch("/api/contractor-prospects/discover", {
         method: "POST",
@@ -25,8 +28,25 @@ export default function AddContractorPage() {
         body: JSON.stringify({ businessName: businessName.trim(), locationHint: locationHint.trim(), website: website.trim() }),
       });
       const data = await res.json();
-      if (data.ok) setResult(data);
-      else setError(data.error || "Deep search failed.");
+      if (data.ok) {
+        setResult(data);
+        // Immediately run the same lead-scoring pipeline the "Generate
+        // Pitch" button on the Prospect Bench uses — deep search should
+        // hand back an actual lead list right away, not just a saved
+        // contractor record the person then has to go click into.
+        setLeadsBusy(true);
+        try {
+          const leadsRes = await fetch(`/api/contractor-prospects?name=${encodeURIComponent(data.contractor.business_name)}`);
+          const leadsData = await leadsRes.json();
+          setLeads(leadsData.ok ? (leadsData.leads || []) : []);
+        } catch {
+          setLeads([]);
+        } finally {
+          setLeadsBusy(false);
+        }
+      } else {
+        setError(data.error || "Deep search failed.");
+      }
     } catch (e) {
       setError(e.message);
     } finally {

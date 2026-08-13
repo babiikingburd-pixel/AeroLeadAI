@@ -1,4 +1,4 @@
-import { supabase } from "../../../lib/supabase";
+import { supabaseServer } from "../../../lib/supabaseServer";
 import { calculatePriority } from "../../../lib/twincities/priorityEngine";
 export const dynamic = "force-dynamic";
 
@@ -47,6 +47,11 @@ function scoreRow(row) {
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const name = searchParams.get("name");
+  const supabase = supabaseServer();
+  if (!supabase) {
+    const selected = name ? FALLBACK_PROSPECTS.find((p) => p.business_name === name) : null;
+    return Response.json({ ok: true, prospects: FALLBACK_PROSPECTS, contractor: selected || null, leads: [], note: "Supabase not configured; showing configured prospect roster only." });
+  }
   try {
     let q = supabase.from("contractor_candidates").select("*").eq("prospect", true).order("prospect_score", { ascending: false });
     if (name) q = q.eq("business_name", name);
