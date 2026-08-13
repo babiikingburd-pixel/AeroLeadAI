@@ -1,0 +1,19 @@
+{
+  "property_id": "MN-EXAMPLE-2076",
+  "digital_twin": {
+    "geometry": {},
+    "materials": {},
+    "systems": {},
+    "history": []
+  },
+  "observations": [],
+  "condition": {},
+  "risk": {},
+  "forecasts": {},
+  "economic_opportunities": [],
+  "trade_matches": [],
+  "interventions": [],
+  "outcomes": [],
+  "provenance": [],
+  "confidence": 0.0
+}

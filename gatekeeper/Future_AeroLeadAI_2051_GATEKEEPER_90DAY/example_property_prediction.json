@@ -1,0 +1,23 @@
+{
+  "property_id": "EXAMPLE-2051",
+  "current_state": {
+    "roof_condition_probability": 0.71,
+    "storm_exposure": 0.83,
+    "tree_risk": 0.64
+  },
+  "forecast": {
+    "12_month": {
+      "repair_probability": 0.38,
+      "replacement_probability": 0.47
+    },
+    "24_month": {
+      "replacement_probability": 0.72
+    }
+  },
+  "economic_opportunity_usd": {
+    "low": 14800,
+    "high": 24600
+  },
+  "recommended_action": "Inspection",
+  "confidence": 0.91
+}

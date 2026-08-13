@@ -1,0 +1,66 @@
+{
+  "role": "100 BC Gatekeeper AI",
+  "scenario": "A 2051 blueprint for property intelligence, digital twins, temporal evidence, prediction, and closed-loop learning.",
+  "track": "AEROLEADAI / 2051 FUTURE ARCHITECTURE",
+  "rule": "Build what 2026 can support; interface what can mature later; block what depends on unavailable physical/scientific infrastructure.",
+  "ninety_day_window": "2026-08-11 through 2026-11-09",
+  "integration_status": "SEPARATE_TRACK_UNTIL_SHARED_CONTRACTS_ARE_READY",
+  "capabilities": [
+    {
+      "name": "property digital twin",
+      "can_build_now": true,
+      "can_interface_now": true,
+      "90_day_target": "canonical property twin + history",
+      "blocker": "record normalization",
+      "proof": "100-property reconstruction test"
+    },
+    {
+      "name": "temporal imagery/change detection",
+      "can_build_now": true,
+      "can_interface_now": true,
+      "90_day_target": "multi-date comparison pipeline",
+      "blocker": "imagery coverage/licensing",
+      "proof": "precision/recall benchmark"
+    },
+    {
+      "name": "multimodal evidence fusion",
+      "can_build_now": true,
+      "can_interface_now": true,
+      "90_day_target": "evidence graph + confidence gate",
+      "blocker": "missing sources/API limits",
+      "proof": "audited evidence cases"
+    },
+    {
+      "name": "storm/property risk prediction",
+      "can_build_now": true,
+      "can_interface_now": true,
+      "90_day_target": "baseline calibrated model",
+      "blocker": "ground-truth labels",
+      "proof": "holdout validation"
+    },
+    {
+      "name": "continuous Earth observation",
+      "can_build_now": false,
+      "can_interface_now": true,
+      "90_day_target": "provider-neutral observation interface",
+      "blocker": "constellation access and economics",
+      "proof": "mock/available-provider adapter"
+    },
+    {
+      "name": "continuous building sensing",
+      "can_build_now": false,
+      "can_interface_now": true,
+      "90_day_target": "sensor contract + simulator",
+      "blocker": "device deployment and ownership",
+      "proof": "simulated stream ingestion"
+    },
+    {
+      "name": "general physical-world foundation model",
+      "can_build_now": false,
+      "can_interface_now": true,
+      "90_day_target": "model-agnostic reasoning interface",
+      "blocker": "model capability and compute",
+      "proof": "multimodal adapter benchmark"
+    }
+  ]
+}
