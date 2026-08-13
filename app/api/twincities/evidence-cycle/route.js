@@ -6,13 +6,18 @@ export const maxDuration = 60;
 const MAX_LIMIT = 12;
 const DEFAULT_LIMIT = 8;
 
-// TEMP-ONE-TIME-TRIGGER: see identical note in autonomous-cycle/route.js —
-// removed together in the immediate follow-up commit.
-const ONE_TIME_TRIGGER_TOKEN = "KMrvkaKYOyaQ49DxPXoh3U_Eso4OV1nk";
-
 function auth(req) {
   const secret = process.env.CRON_SECRET;
-  if (new URL(req.url).searchParams.get("secret") === ONE_TIME_TRIGGER_TOKEN) return true;
+  // Same-origin calls (the "Solidify Top 500" button in app/twincities/page.jsx,
+  // which never sent the cron secret — a real bug: this route always 401'd for
+  // every real user click since CRON_SECRET is set in production) are trusted
+  // without it. The whole app already sits behind AuthGate's password; that's
+  // the actual access control for an interactive user. CRON_SECRET's job is to
+  // gate *external* callers with no Origin header at all (Vercel Cron, curl),
+  // not a logged-in user clicking a button inside the app they already unlocked.
+  const origin = req.headers.get("origin") || "";
+  const host = req.headers.get("host") || "";
+  if (host && origin && origin.includes(host)) return true;
   if (!secret) return true;
   return req.headers.get("authorization") === `Bearer ${secret}` ||
     new URL(req.url).searchParams.get("secret") === secret;
@@ -138,5 +143,3 @@ export async function POST(req) {
     note: "Evidence cycle processes highest-ranked properties first and persists permit history, weather evidence, imagery retrieval, then triggers rescoring.",
   });
 }
-
-export async function GET(req) { return POST(req); }

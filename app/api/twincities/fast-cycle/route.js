@@ -4,13 +4,8 @@ export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 
-// TEMP-ONE-TIME-TRIGGER: see identical note in autonomous-cycle/route.js —
-// removed together in the immediate follow-up commit.
-const ONE_TIME_TRIGGER_TOKEN = "KMrvkaKYOyaQ49DxPXoh3U_Eso4OV1nk";
-
 function authorized(req) {
   const secret = process.env.CRON_SECRET;
-  if (new URL(req.url).searchParams.get("secret") === ONE_TIME_TRIGGER_TOKEN) return true;
   if (!secret) return true;
   return req.headers.get("authorization") === `Bearer ${secret}` || new URL(req.url).searchParams.get("secret") === secret;
 }
@@ -151,5 +146,3 @@ export async function POST(req) {
     generatedAt: new Date().toISOString(),
   });
 }
-
-export async function GET(req) { return POST(req); }

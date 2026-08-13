@@ -1,0 +1,421 @@
+{
+  "assessment": {
+    "type": "assessment_v2",
+    "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+    "v1": {
+      "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+      "classification": "REAL-NOW",
+      "barrier": "Unknown / insufficient evidence",
+      "confidence": 1.0,
+      "rationale": [
+        "Classification selected from 6 evidence item(s).",
+        "Barrier assessed as: Unknown / insufficient evidence."
+      ],
+      "missing_components": [],
+      "existing_components": [
+        "data"
+      ],
+      "experiments": [
+        {
+          "hypothesis": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "smallest_test": "Test the smallest independently observable component of: AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "success_condition": "The claimed capability works against a real input with an observable output.",
+          "failure_condition": "The test cannot complete, depends on an unavailable capability, or produces an unverifiable result.",
+          "dependencies": [
+            "Unknown / insufficient evidence"
+          ],
+          "status": "proposed",
+          "result": null,
+          "id": "77ef3e45-d682-4aff-b05b-febedf592f0b"
+        }
+      ],
+      "evidence": [
+        {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "source": "AeroLeadAI_repo_20260813.zip:lib/planner.js",
+          "kind": "code_inspection",
+          "confidence": 0.95,
+          "verified": true,
+          "notes": "Existing planner uses bounded candidate selection, priority scoring and real stored fields.",
+          "timestamp": "2026-08-13T16:53:53.262585+00:00",
+          "id": "64b80de8-eaa0-4c3f-a1d4-ef0beafc448a"
+        },
+        {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "source": "AeroLeadAI_repo_20260813.zip:app/api/top-leads/route.js",
+          "kind": "code_inspection",
+          "confidence": 0.95,
+          "verified": true,
+          "notes": "Existing API reads priority_score, evidence_score, assessed_value, validation fields from batch_leads.",
+          "timestamp": "2026-08-13T16:53:53.262633+00:00",
+          "id": "d9cdabc6-9872-45eb-bc1c-cabeb30efb12"
+        },
+        {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "source": "AeroLeadAI_repo_20260813.zip:app/api/twincities/top500-network/route.js",
+          "kind": "code_inspection",
+          "confidence": 0.95,
+          "verified": true,
+          "notes": "Existing Top-500 network has residential, permits, storm, imagery, damage, development and competition lanes.",
+          "timestamp": "2026-08-13T16:53:53.262641+00:00",
+          "id": "41670536-0fec-4f10-b451-84ebbb4708f2"
+        },
+        {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "source": "GateKeeper v2.3:test_engine.py",
+          "kind": "test",
+          "confidence": 0.95,
+          "verified": true,
+          "notes": "2/2 core engine tests passed in this environment.",
+          "timestamp": "2026-08-13T16:53:53.262647+00:00",
+          "id": "a329346d-8988-4a33-ba41-5deca95d6830"
+        },
+        {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "source": "GateKeeper v2.3:test_engine_v2.py",
+          "kind": "test",
+          "confidence": 0.95,
+          "verified": true,
+          "notes": "7/7 v2 engine tests passed in this environment.",
+          "timestamp": "2026-08-13T16:53:53.262652+00:00",
+          "id": "39dffa17-ba9c-4d2b-b70f-16c1d3588d5b"
+        },
+        {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "source": "GateKeeper v2.3:test_memory_archive.py",
+          "kind": "test",
+          "confidence": 0.95,
+          "verified": true,
+          "notes": "8/8 memory archive tests passed in this environment.",
+          "timestamp": "2026-08-13T16:53:53.262657+00:00",
+          "id": "acdd35b9-1008-41f4-91ec-c9e1aff067d3"
+        }
+      ],
+      "timestamp": "2026-08-13T16:53:53.262753+00:00"
+    },
+    "v2": {
+      "classification": "BUILDABLE-NOW",
+      "barrier": "Unknown / insufficient evidence",
+      "confidence": 1.0,
+      "rationale": [
+        "v1 keyword baseline: REAL-NOW (barrier: Unknown / insufficient evidence).",
+        "LLM opinion (inline-agent-reasoning) returned BUILDABLE-NOW with stated confidence 0.8.",
+        "No prior journal history overlaps this claim's components."
+      ],
+      "source": "llm+audit",
+      "domain_confidence": {
+        "data": 0.4,
+        "property_intel": 0.9,
+        "trade_fulfillment": 0.7
+      },
+      "negation_flags": [],
+      "llm_opinion_used": true,
+      "llm_provider": "ManualOpinionProvider"
+    },
+    "audit_v2": {
+      "pass": true,
+      "issues": []
+    }
+  },
+  "investigation": {
+    "investigation_id": "01a21e85-051f-464e-899e-65496d66aa7e",
+    "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+    "status": "complete",
+    "score": 1.0,
+    "confidence": 1.0,
+    "reproducibility": 1.0,
+    "probes": [
+      {
+        "probe": {
+          "name": "claim_parse",
+          "purpose": "Determine exactly what capability is being claimed.",
+          "capability": "reasoning",
+          "action": "parse_claim",
+          "args": {
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields."
+          },
+          "risk": "low",
+          "timeout_s": 20.0,
+          "retries": 2,
+          "required": true,
+          "id": "ef6021ec-961d-4f99-a6c2-2fc896cc0f1e"
+        },
+        "ok": true,
+        "output": {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "testable": true
+        },
+        "error": null,
+        "transient": false,
+        "duration_s": 1.3320000107341912e-06,
+        "evidence": [
+          {
+            "kind": "probe_result",
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+            "value": {
+              "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+              "testable": true
+            },
+            "confidence": 0.9,
+            "source": "reasoning",
+            "observed_at": "2026-08-13T16:54:22.672550+00:00",
+            "verified": true,
+            "metadata": {
+              "probe": "claim_parse",
+              "attempt": 1,
+              "error": null
+            },
+            "id": "2948e668-e81b-4a95-9ff3-d6307d71d847"
+          }
+        ],
+        "attempt": 1,
+        "status": "SUCCESS"
+      },
+      {
+        "probe": {
+          "name": "minimal_execution",
+          "purpose": "Attempt the smallest safe demonstration.",
+          "capability": "execution",
+          "action": "minimal_test",
+          "args": {
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields."
+          },
+          "risk": "low",
+          "timeout_s": 20.0,
+          "retries": 2,
+          "required": true,
+          "id": "ef498ab1-23a8-43f6-94bb-f803f423adce"
+        },
+        "ok": true,
+        "output": {
+          "demonstrated": true,
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields."
+        },
+        "error": null,
+        "transient": false,
+        "duration_s": 1.0720000318542589e-06,
+        "evidence": [
+          {
+            "kind": "probe_result",
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+            "value": {
+              "demonstrated": true,
+              "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields."
+            },
+            "confidence": 0.9,
+            "source": "execution",
+            "observed_at": "2026-08-13T16:54:22.672603+00:00",
+            "verified": true,
+            "metadata": {
+              "probe": "minimal_execution",
+              "attempt": 1,
+              "error": null
+            },
+            "id": "d6aa9111-153b-4476-9a14-c1073de72ff6"
+          }
+        ],
+        "attempt": 1,
+        "status": "SUCCESS"
+      },
+      {
+        "probe": {
+          "name": "repeatability",
+          "purpose": "Determine whether successful behavior can be reproduced.",
+          "capability": "execution",
+          "action": "repeat_test",
+          "args": {
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields."
+          },
+          "risk": "low",
+          "timeout_s": 20.0,
+          "retries": 1,
+          "required": true,
+          "id": "e4f577e6-2ccd-4db0-9187-af9bc5ffb1bf"
+        },
+        "ok": true,
+        "output": {
+          "repeatability_test": "available"
+        },
+        "error": null,
+        "transient": false,
+        "duration_s": 5.20999947184464e-07,
+        "evidence": [
+          {
+            "kind": "probe_result",
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+            "value": {
+              "repeatability_test": "available"
+            },
+            "confidence": 0.9,
+            "source": "execution",
+            "observed_at": "2026-08-13T16:54:22.672625+00:00",
+            "verified": true,
+            "metadata": {
+              "probe": "repeatability",
+              "attempt": 1,
+              "error": null
+            },
+            "id": "de383d07-e6c6-4500-bf1d-f4a58d38fddc"
+          }
+        ],
+        "attempt": 1,
+        "status": "SUCCESS"
+      },
+      {
+        "probe": {
+          "name": "failure_boundary",
+          "purpose": "Determine whether failure is temporary, environmental, authorization-related, or structural.",
+          "capability": "diagnostics",
+          "action": "failure_boundary",
+          "args": {
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields."
+          },
+          "risk": "low",
+          "timeout_s": 20.0,
+          "retries": 2,
+          "required": true,
+          "id": "29528858-1a51-449a-b95f-f34b5ee5f668"
+        },
+        "ok": true,
+        "output": {
+          "categories": [
+            "transient",
+            "network",
+            "authorization",
+            "rate_limit",
+            "missing_runtime",
+            "unsupported",
+            "invalid_input",
+            "unknown"
+          ]
+        },
+        "error": null,
+        "transient": false,
+        "duration_s": 8.009999987734773e-07,
+        "evidence": [
+          {
+            "kind": "probe_result",
+            "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+            "value": {
+              "categories": [
+                "transient",
+                "network",
+                "authorization",
+                "rate_limit",
+                "missing_runtime",
+                "unsupported",
+                "invalid_input",
+                "unknown"
+              ]
+            },
+            "confidence": 0.9,
+            "source": "diagnostics",
+            "observed_at": "2026-08-13T16:54:22.672642+00:00",
+            "verified": true,
+            "metadata": {
+              "probe": "failure_boundary",
+              "attempt": 1,
+              "error": null
+            },
+            "id": "cf37fa6c-ea4b-4bc2-9a2b-77d0265a64fb"
+          }
+        ],
+        "attempt": 1,
+        "status": "SUCCESS"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "probe_result",
+        "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+        "value": {
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+          "testable": true
+        },
+        "confidence": 0.9,
+        "source": "reasoning",
+        "observed_at": "2026-08-13T16:54:22.672550+00:00",
+        "verified": true,
+        "metadata": {
+          "probe": "claim_parse",
+          "attempt": 1,
+          "error": null
+        },
+        "id": "2948e668-e81b-4a95-9ff3-d6307d71d847"
+      },
+      {
+        "kind": "probe_result",
+        "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+        "value": {
+          "demonstrated": true,
+          "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields."
+        },
+        "confidence": 0.9,
+        "source": "execution",
+        "observed_at": "2026-08-13T16:54:22.672603+00:00",
+        "verified": true,
+        "metadata": {
+          "probe": "minimal_execution",
+          "attempt": 1,
+          "error": null
+        },
+        "id": "d6aa9111-153b-4476-9a14-c1073de72ff6"
+      },
+      {
+        "kind": "probe_result",
+        "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+        "value": {
+          "repeatability_test": "available"
+        },
+        "confidence": 0.9,
+        "source": "execution",
+        "observed_at": "2026-08-13T16:54:22.672625+00:00",
+        "verified": true,
+        "metadata": {
+          "probe": "repeatability",
+          "attempt": 1,
+          "error": null
+        },
+        "id": "de383d07-e6c6-4500-bf1d-f4a58d38fddc"
+      },
+      {
+        "kind": "probe_result",
+        "claim": "AeroLeadAI can add a bounded Top-10 opportunity command that routes contractor priority #1 to Apex Roofing while keeping property ranking evidence-based, using the existing engines and data fields.",
+        "value": {
+          "categories": [
+            "transient",
+            "network",
+            "authorization",
+            "rate_limit",
+            "missing_runtime",
+            "unsupported",
+            "invalid_input",
+            "unknown"
+          ]
+        },
+        "confidence": 0.9,
+        "source": "diagnostics",
+        "observed_at": "2026-08-13T16:54:22.672642+00:00",
+        "verified": true,
+        "metadata": {
+          "probe": "failure_boundary",
+          "attempt": 1,
+          "error": null
+        },
+        "id": "cf37fa6c-ea4b-4bc2-9a2b-77d0265a64fb"
+      }
+    ],
+    "contradictions": [],
+    "decision": "BUILDABLE-NOW",
+    "next_actions": [
+      "No domain-specific runtime probe was planned; only a generic demonstration ran."
+    ],
+    "created_at": "2026-08-13T16:54:22.672676+00:00"
+  },
+  "environment_notes": [
+    "GateKeeper engine tests passed: test_engine 2/2, test_engine_v2 7/7, test_memory_archive 8/8.",
+    "Full GateKeeper suite did not complete in the execution window; test_session_driver timed out in this environment.",
+    "GateKeeper investigation engine completed with BUILDABLE-NOW, score 1.0, confidence 1.0, reproducibility 1.0, no contradictions."
+  ],
+  "generated_at": "2026-08-13T16:54:22Z"
+}

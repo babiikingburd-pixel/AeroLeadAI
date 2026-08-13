@@ -41,7 +41,7 @@ export default function MaintenanceConsole() {
   }
 
   function tryUnlock() {
-    if (code === PASSCODE) {
+    if (code.trim().toUpperCase() === PASSCODE) {
       setUnlocked(true);
       setError("");
     } else {
