@@ -12,6 +12,8 @@
 //     which is a DIFFERENT physical process from total snowfall and can be
 //     the higher-risk one even in a light-snow winter.
 
+export const dynamic = "force-dynamic";
+
 const WINTER_HAZARD_PATTERN = /winter storm|ice storm|freezing rain|blizzard|winter weather advisory|frost|freeze warning/i;
 
 export async function POST(req) {

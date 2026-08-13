@@ -3,6 +3,7 @@
 // "add a county" into a status you can see, instead of tribal knowledge.
 
 import { supabaseGet, supabasePost, supabasePatch } from "../../../../lib/supabaseRest";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const res = await supabaseGet("counties?select=*&order=created_at.desc");

@@ -1,6 +1,7 @@
 import { Boardroom } from "../../../../lib/executive/boardroom";
 import { AeroLeadAIAdapter } from "../../../../lib/executive/adapter";
 import { createExecutiveAIClient, activeProvider } from "../../../../lib/executive/aiClient";
+export const dynamic = "force-dynamic";
 
 // The full negotiation (up to 3 rounds x 6 agents, some sequential) can take
 // a while — same reasoning as /api/discover and /api/zip-scan's extended

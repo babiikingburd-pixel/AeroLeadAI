@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
 import { requireApiKey } from "@/lib/auth";
+export const dynamic = "force-dynamic";
 
 // Runs one APEX governance cycle: recomputes evidence_confidence and
 // evidence_completeness on batch_leads for recently-investigated properties,

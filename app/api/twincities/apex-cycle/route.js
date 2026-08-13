@@ -1,4 +1,6 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
+
 export const maxDuration=60;
 function auth(req){const s=process.env.CRON_SECRET;if(!s)return true;return req.headers.get("authorization")===`Bearer ${s}`||new URL(req.url).searchParams.get("secret")===s;}
 export async function POST(req){

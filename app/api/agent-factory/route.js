@@ -8,6 +8,7 @@ import { create, listActive, evaluate, retire } from "../../../lib/agentFactory"
 import { spawnCrawler, availableMissions } from "../../../lib/crawlerForge";
 import { evaluateGeneration, retireBottomPerformers } from "../../../lib/evolutionEngine";
 import { supabaseGet, supabasePatch } from "../../../lib/supabaseRest";
+export const dynamic = "force-dynamic";
 
 function baseUrl(req) {
   const url = new URL(req.url);

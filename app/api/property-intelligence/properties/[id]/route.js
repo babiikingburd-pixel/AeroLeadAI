@@ -4,6 +4,7 @@ import { getPropertyGraph } from "../../../../../lib/graph";
 import { getRecentChanges } from "../../../../../lib/changeDetector";
 import { getPredictions } from "../../../../../lib/predictions";
 import { getOutcomes } from "../../../../../lib/outcomes";
+export const dynamic = "force-dynamic";
 
 export async function GET(req, { params }) {
   const { id } = params;

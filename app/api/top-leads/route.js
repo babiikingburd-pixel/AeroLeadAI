@@ -1,6 +1,7 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { SUPPORTED_COUNTIES } from "../../../lib/twincities/propertyValue";
 import { calculatePriority } from "../../../lib/twincities/priorityEngine";
+export const dynamic = "force-dynamic";
 
 // GET /api/top-leads?tier=candidates|review|contractor
 //

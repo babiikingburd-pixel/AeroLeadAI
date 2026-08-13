@@ -1,4 +1,5 @@
 import { callTextModel, activeProvider } from "../../../lib/aiClient";
+export const dynamic = "force-dynamic";
 
 // AI Lead Scoring & Sales Intelligence: turns a property's raw findings into
 // a ranked, sales-facing scorecard — roof age, damage severity, insurance

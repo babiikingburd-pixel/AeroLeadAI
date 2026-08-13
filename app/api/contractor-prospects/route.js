@@ -1,5 +1,6 @@
 import { supabase } from "../../../lib/supabase";
 import { calculatePriority } from "../../../lib/twincities/priorityEngine";
+export const dynamic = "force-dynamic";
 
 const FALLBACK_PROSPECTS = [
   { business_name: "APEX Exteriors LLC", prospect_score: 96, service_area_cities: ["Plymouth","Maple Grove","Brooklyn Park","Champlin","Golden Valley"] },

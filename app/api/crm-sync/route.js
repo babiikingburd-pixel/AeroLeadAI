@@ -1,6 +1,8 @@
 // Pushes leads to HubSpot and/or Salesforce via configured webhook/inbound
 // endpoints. Secrets live ONLY in env vars. If neither is configured, the
 // route says so honestly instead of pretending it synced.
+export const dynamic = "force-dynamic";
+
 export async function POST(req) {
   const { leads } = await req.json();
   if (!Array.isArray(leads) || leads.length === 0 || leads.length > 500) {

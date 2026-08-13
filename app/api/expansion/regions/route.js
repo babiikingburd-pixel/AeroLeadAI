@@ -1,4 +1,5 @@
 import { startRegionLaunch, listRegionLaunches, completeChecklistStep } from "../../../../lib/expansion/playbook";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {

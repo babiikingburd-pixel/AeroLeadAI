@@ -1,6 +1,7 @@
 import { CEOAgent } from "../../../../lib/executive/agents/CEOAgent";
 import { AeroLeadAIAdapter } from "../../../../lib/executive/adapter";
 import { createExecutiveAIClient, activeProvider } from "../../../../lib/executive/aiClient";
+export const dynamic = "force-dynamic";
 
 // Quick advisory mode — CEOAgent.runSession(question) with no proposedAction,
 // so no vote, no Fifth Business, no persisted decision. For "what's the

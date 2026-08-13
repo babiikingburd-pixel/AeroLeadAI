@@ -1,4 +1,5 @@
 import { submitCandidate, listCandidates } from "../../../../lib/growth/recruiter";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const status = new URL(req.url).searchParams.get("status") || undefined;

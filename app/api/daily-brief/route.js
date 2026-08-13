@@ -18,6 +18,7 @@
 //      for the next scheduled run.
 
 import { supabaseGet } from "../../../lib/supabaseRest";
+export const dynamic = "force-dynamic";
 
 function checkAuth(req) {
   const secret = process.env.CRON_SECRET;

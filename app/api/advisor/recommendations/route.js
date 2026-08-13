@@ -1,4 +1,5 @@
 import { recommendRecruitmentTargets, recommendMarketEntry, recommendHighestROIOpportunities } from "../../../../lib/advisor/strategicAdvisor";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {

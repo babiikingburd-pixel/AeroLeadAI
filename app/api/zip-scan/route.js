@@ -11,6 +11,7 @@
 // wall time is bounded by the slowest single call, not the sum of all of them.
 
 import { cacheGet, cacheSet } from "../../../lib/serverCache";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 45; // extend past the platform default so slow
 // upstream geocoding APIs (Overpass especially) get a real chance to respond

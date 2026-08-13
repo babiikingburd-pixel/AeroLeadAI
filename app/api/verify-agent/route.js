@@ -1,4 +1,5 @@
 import { callVisionModel, activeProvider } from "../../../lib/aiClient";
+export const dynamic = "force-dynamic";
 
 const DOMAIN_LABELS = { roof: "Roof", tree: "Tree", driveway: "Driveway" };
 

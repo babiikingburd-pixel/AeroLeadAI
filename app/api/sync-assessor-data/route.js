@@ -1,6 +1,7 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { calculateReplacementCost } from "../../../lib/twincities/calculateReplacementCost";
 import { SUPPORTED_COUNTIES } from "../../../lib/twincities/propertyValue";
+export const dynamic = "force-dynamic";
 
 // POST /api/sync-assessor-data?limit=500
 //

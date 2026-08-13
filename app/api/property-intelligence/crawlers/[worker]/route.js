@@ -21,6 +21,7 @@ import { supabaseGet, supabasePost } from "../../../../../lib/supabaseRest";
 import { findOrCreateProperty } from "../../../../../lib/properties";
 import { addTimelineEvent } from "../../../../../lib/timeline";
 import { recordChange } from "../../../../../lib/changeDetector";
+export const dynamic = "force-dynamic";
 
 const KNOWN_WORKERS = ["permits", "county_records", "tax_records", "listings", "zoning"];
 

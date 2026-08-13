@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 export const maxDuration = 45;
 
 async function fetchWithTimeout(url, opts = {}, ms = 8000) {

@@ -1,4 +1,5 @@
 import { recordChange, getTopOpportunities } from "../../../../lib/changeDetector";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);

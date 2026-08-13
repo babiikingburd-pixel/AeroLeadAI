@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+export const dynamic = "force-dynamic";
 
 // Superseded by the generalized /api/reports/[contractor] endpoint (see
 // lib/twincities/contractors.js). Kept as a redirect so any /api/apex10

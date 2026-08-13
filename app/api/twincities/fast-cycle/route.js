@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { TC_COUNTIES, FAST_SCORE_FIELDS, scoreRow, validationPriority, buildValidationChecks } from "../../../../lib/twincities/fastCycle";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 

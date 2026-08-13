@@ -1,6 +1,7 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { applyEvidenceAndRescore } from "../../../../lib/twincities/evidenceEvents";
 import { getActiveAlerts, parseStormSignals } from "../../../../lib/evidenceIndex/enrichers/stormOverlay";
+export const dynamic = "force-dynamic";
 
 // FREE EVIDENCE CHECK — on-demand, per-property, zero-cost.
 //

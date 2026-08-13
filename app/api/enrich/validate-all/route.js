@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { VALIDATION_CAPABILITIES, gapSummary } from "../../../../lib/twincities/validationCapabilities";
+export const dynamic = "force-dynamic";
 
 // VALIDATE-ALL: when a lead enters the priority queue (the "500 box"), this
 // attempts EVERY evidence dimension the system currently knows how to

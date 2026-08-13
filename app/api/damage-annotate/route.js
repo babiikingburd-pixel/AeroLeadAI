@@ -1,5 +1,6 @@
 import { callVisionModel, activeProvider } from "../../../lib/aiClient";
 import { isValidImagePayload } from "../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 // Annotated damage detection: same vision pipeline as /api/damage-agent,
 // but asks for normalized bounding boxes per damage finding instead of a

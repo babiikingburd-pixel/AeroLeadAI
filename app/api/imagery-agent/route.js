@@ -32,6 +32,7 @@
 
 import { cacheGet, cacheSet } from "../../../lib/serverCache";
 import { isValidLatLon } from "../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 const CACHE_TTL_MS = 30 * 24 * 3600 * 1000; // satellite/street imagery doesn't change often
 const MEM_CACHE_TTL_MS = 30 * 60 * 1000;

@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 function clamp(n){ return Math.max(0,Math.min(100,n)); }
 

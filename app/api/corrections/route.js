@@ -8,6 +8,7 @@
 // of ground truth is invented here; that would be fabricating data.
 
 import { supabasePost, supabaseGet, normalizeAddress } from "../../../lib/supabaseRest";
+export const dynamic = "force-dynamic";
 
 export async function POST(req) {
   const { address, domain, correctedScore, reason, correctedBy } = await req.json();

@@ -1,4 +1,5 @@
 import { getContractorBenchmark, getSeasonalDemandPattern, getRegionalDemandBenchmark } from "../../../../lib/intelligence/benchmarks";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);

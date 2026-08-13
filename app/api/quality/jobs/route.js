@@ -1,5 +1,6 @@
 import { auditCompletedJob, getFlaggedJobs } from "../../../../lib/quality/audit";
 import { isValidImagePayload } from "../../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {

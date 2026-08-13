@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 const VALID_STATUSES = ["pending", "approved", "rejected", "needs_rescan"];
 

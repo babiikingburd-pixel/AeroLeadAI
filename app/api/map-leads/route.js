@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 // Feeds the /map Lead Map with the batch_leads table (the /batch pipeline's
 // durable, cross-device queue — 18k+ rows in production). The map previously

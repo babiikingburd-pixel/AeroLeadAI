@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
 import { requireApiKey } from "@/lib/auth";
+export const dynamic = "force-dynamic";
 
 // Reads top500_crawler_lanes (already configured: competition, residential,
 // permits, imagery, storm, damage, development — each with its own

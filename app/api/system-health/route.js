@@ -1,4 +1,5 @@
 import { activeProvider } from "../../../lib/aiClient";
+export const dynamic = "force-dynamic";
 
 // Self-diagnostic for the Operations Command Center: which subsystems are
 // actually configured and reachable, right now. Reports booleans/status

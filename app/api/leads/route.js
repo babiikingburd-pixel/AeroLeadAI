@@ -1,4 +1,5 @@
 import { getLeadsFromDB } from "../../../lib/supabase";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   try {

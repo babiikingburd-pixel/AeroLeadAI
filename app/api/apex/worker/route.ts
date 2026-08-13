@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
 import { requireApiKey } from "@/lib/auth";
 import { runLane, fetchLead } from "@/lib/apex/lanes";
+export const dynamic = "force-dynamic";
 
 // Claims a batch of queued top500_crawler_tasks, executes the real lane
 // logic in lib/apex/lanes.ts, writes results to top500_crawler_findings

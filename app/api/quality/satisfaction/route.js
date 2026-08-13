@@ -1,4 +1,5 @@
 import { recordSatisfaction } from "../../../../lib/quality/audit";
+export const dynamic = "force-dynamic";
 
 export async function POST(req) {
   try {

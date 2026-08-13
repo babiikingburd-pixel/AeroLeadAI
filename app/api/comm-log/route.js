@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 export async function POST(req) {
   const { channel, to, address, summary } = await req.json();
   if (!["email", "sms"].includes(channel)) return Response.json({ ok: false, error: "channel must be 'email' or 'sms'." }, { status: 400 });

@@ -1,5 +1,6 @@
 import { callVisionModel, activeProvider } from "../../../lib/aiClient";
 import { isValidImagePayload } from "../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 const DOMAIN_PROMPTS = {
   roof: {

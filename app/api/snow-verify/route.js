@@ -1,4 +1,5 @@
 import { callTextModel, activeProvider } from "../../../lib/aiClient";
+export const dynamic = "force-dynamic";
 
 export async function POST(req) {
   try {

@@ -1,6 +1,7 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { rankValidationBatch } from "../../../../lib/twincities/apex7Engine";
 import { chooseWork } from "../../../../lib/twincities/apex7Queue";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 300;
 

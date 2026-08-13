@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { APEX_RELEASES, APEX_VERSION } from '../../../lib/apex/releaseTrain';
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const checks = [
