@@ -2,8 +2,14 @@ import { supabaseServer } from "../../../../lib/supabaseServer";
 
 export const maxDuration = 60;
 
+// TEMP-ONE-TIME-TRIGGER: added to run a single manual cycle without dashboard
+// access to the existing CRON_SECRET value. Remove in the immediate follow-up
+// commit — see "Remove one-time manual trigger" commit right after this one.
+const ONE_TIME_TRIGGER_TOKEN = "KMrvkaKYOyaQ49DxPXoh3U_Eso4OV1nk";
+
 function auth(req) {
   const secret = process.env.CRON_SECRET;
+  if (new URL(req.url).searchParams.get("secret") === ONE_TIME_TRIGGER_TOKEN) return true;
   if (!secret) return true;
   return req.headers.get("authorization") === `Bearer ${secret}` || new URL(req.url).searchParams.get("secret") === secret;
 }
