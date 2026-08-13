@@ -7,6 +7,7 @@ export default function ApexRoofingCommand() {
   return <main style={{padding:24,fontFamily:"system-ui"}}>
     <h1>Apex Roofing — Priority Command</h1>
     <p><b>Contractor priority #1.</b> Property rankings remain evidence-based.</p>
+    <p><a href="/twincities/reports/apex-roofing">→ Open printable Top-20 report (PDF-ready, for handing to Apex Roofing)</a></p>
     {state.loading && <p>Loading Top 10…</p>}
     {state.error && <p>Unable to load: {state.error}</p>}
     <ol>{state.opportunities.map(o=><li key={o.id} style={{margin:"14px 0"}}>
