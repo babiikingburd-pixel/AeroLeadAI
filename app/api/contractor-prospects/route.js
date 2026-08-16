@@ -1,6 +1,8 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { calculatePriority } from "../../../lib/twincities/priorityEngine";
+import { requestPropertyData, findRequestId, getPropertyResult, extractPropertyImages } from "../../../lib/eagleview";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const FALLBACK_PROSPECTS = [
   { business_name: "APEX Exteriors LLC", prospect_score: 96, service_area_cities: ["Plymouth","Maple Grove","Brooklyn Park","Champlin","Golden Valley"] },
@@ -15,14 +17,9 @@ const FALLBACK_PROSPECTS = [
   { business_name: "A-1 Restoration", prospect_score: 87, service_area_cities: ["Plymouth","Bloomington","Carver","Chanhassen","Chaska","Deephaven","Eden Prairie","Edina","Golden Valley","Excelsior","Hopkins"] },
 ];
 
-// Maps a raw batch_leads row (snake_case DB columns) onto the camelCase
-// shape calculatePriority actually expects, then returns the real
-// priorityScore — this was the bug: the previous version passed the raw
-// row straight into calculatePriority and read a `.score` field that
-// doesn't exist on its return value (it's `.priorityScore`), and none of
-// the snake_case DB columns matched the camelCase fields the scoring
-// function reads (year_built vs yearBuilt, etc.), so every lead silently
-// scored 0/undefined and "top 10" wasn't actually sorted by anything.
+const EV_PRODUCTS = ["property_data_id_003","property_data_id_004","property_data_id_008","property_data_id_009"];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function scoreRow(row) {
   const result = calculatePriority({
     county: row.county,
@@ -42,6 +39,45 @@ function scoreRow(row) {
     gutterIndicator: row.damage_notes?.gutterIndicator === true,
   });
   return { ...row, _score: result.priorityScore, evidenceScore: result.evidenceScore, confidenceScore: result.confidenceScore, entered: result.entered };
+}
+
+async function waitForEagleView(requestId, maxWaitMs = 12000) {
+  const started = Date.now();
+  while (Date.now() - started < maxWaitMs) {
+    const result = await getPropertyResult(requestId);
+    const status = String(result?.data?.request?.status || result?.data?.status || "").toLowerCase();
+    if (result?.status === 200 && status !== "in progress" && status !== "processing") return result.data;
+    await sleep(900);
+  }
+  return null;
+}
+
+async function enrichImagery(lead) {
+  try {
+    const address = [lead.address || lead.property_address, lead.city, lead.state || "MN", lead.zip].filter(Boolean).join(", ");
+    if (!address && !(lead.lat && lead.lon)) return { ...lead, images: [], image_status: "UNAVAILABLE" };
+    const submitted = await requestPropertyData({ address, lat: lead.lat, lon: lead.lon, productIds: EV_PRODUCTS });
+    const requestId = findRequestId(submitted);
+    if (!requestId) return { ...lead, images: [], image_status: "SUBMITTED" };
+    const data = await waitForEagleView(requestId);
+    const images = extractPropertyImages(data).map((img) => ({ ...img, proxyUrl: `/api/eagleview?imageToken=${encodeURIComponent(img.token)}` }));
+    return { ...lead, images, image_status: images.length ? "READY" : "PENDING", eagleview_request_id: requestId };
+  } catch (e) {
+    return { ...lead, images: [], image_status: "ERROR", image_error: e?.message || "EagleView imagery unavailable" };
+  }
+}
+
+async function enrichTopLeads(leads) {
+  const out = new Array(leads.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < leads.length) {
+      const i = cursor++;
+      out[i] = await enrichImagery(leads[i]);
+    }
+  }
+  await Promise.all([worker(), worker(), worker()]);
+  return out;
 }
 
 export async function GET(request) {
@@ -67,13 +103,11 @@ export async function GET(request) {
       let leadQuery = supabase.from("batch_leads").select("*").eq("sales_status", "new").limit(500);
       if (cities.length) leadQuery = leadQuery.in("city", cities);
       const { data } = await leadQuery;
-      leads = (data || [])
-        .map(scoreRow)
-        .filter((r) => r.entered && r._score > 0)
-        .sort((a, b) => b._score - a._score)
-        .slice(0, 10);
+      const ranked = (data || []).map(scoreRow).filter((r) => r.entered && r._score > 0).sort((a, b) => b._score - a._score).slice(0, 10);
+      // Contractor screens are visual-first: do the EagleView lookup before returning the lead set.
+      leads = await enrichTopLeads(ranked);
     }
-    return Response.json({ ok: true, prospects: list.length ? list : FALLBACK_PROSPECTS, contractor: selected, leads });
+    return Response.json({ ok: true, prospects: list.length ? list : FALLBACK_PROSPECTS, contractor: selected, leads, imagery_mode: selected ? "EAGER_EAGLEVIEW" : "IDLE" });
   } catch (e) {
     const selected = name ? FALLBACK_PROSPECTS.find((p) => p.business_name === name) : null;
     if (name && !selected) return Response.json({ ok: false, error: e.message }, { status: 500 });
