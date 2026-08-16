@@ -1,5 +1,5 @@
-import { supabaseServer } from "../../../../../lib/supabaseServer";
-import { eagleViewConfig, eagleViewConfigured, requestPropertyData, findRequestId, getPropertyResult, extractPropertyImages } from "../../../../../lib/eagleview";
+import { supabaseServer } from "../../../../lib/supabaseServer";
+import { eagleViewConfig, eagleViewConfigured, requestPropertyData, findRequestId, getPropertyResult, extractPropertyImages } from "../../../../lib/eagleview";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -8,6 +8,8 @@ const DEFAULT_ANCHOR = process.env.EAGLEVIEW_EDINA_ANCHOR || "4300 Interlachen B
 const FALLBACK_ANCHOR = "Vernon Ave S & Interlachen Blvd, Edina, MN 55436";
 const DEFAULT_RADIUS_MILES = Number(process.env.EAGLEVIEW_EDINA_RADIUS_MILES || 1);
 const DEFAULT_LIMIT = Number(process.env.EAGLEVIEW_EDINA_DAILY_LIMIT || 5);
+// User estimates ~26 days remaining as of 2026-08-16. Override in Vercel if EagleView shows a different expiry.
+const CAMPAIGN_END = new Date(process.env.EAGLEVIEW_CAMPAIGN_END || "2026-09-11T23:59:59-05:00");
 
 function haversineMiles(lat1, lon1, lat2, lon2) {
   const R = 3958.7613;
@@ -40,6 +42,10 @@ async function pollResult(requestId, attempts = 8, delayMs = 1500) {
 }
 
 async function run(req, options = {}) {
+  if (Date.now() > CAMPAIGN_END.getTime()) {
+    return Response.json({ ok: true, stopped: true, campaign: "edina-interlachen-radius", reason: "trial_window_ended", campaignEnd: CAMPAIGN_END.toISOString() });
+  }
+
   if (!eagleViewConfigured()) {
     return Response.json({ ok: false, error: "EagleView credentials are not configured in this deployment." }, { status: 500 });
   }
@@ -91,14 +97,14 @@ async function run(req, options = {}) {
     .order("priority_score", { ascending: false, nullsFirst: false })
     .limit(500);
 
-  if (error) {
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
-  }
+  if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
 
-  const candidates = (rows || [])
+  const inRadius = (rows || [])
     .filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)))
     .map((r) => ({ ...r, distanceMiles: haversineMiles(anchor.lat, anchor.lon, r.lat, r.lon) }))
-    .filter((r) => r.distanceMiles <= radiusMiles)
+    .filter((r) => r.distanceMiles <= radiusMiles);
+
+  const candidates = inRadius
     .sort((a, b) => (Number(b.priority_score) || 0) - (Number(a.priority_score) || 0) || a.distanceMiles - b.distanceMiles)
     .slice(0, limit);
 
@@ -106,19 +112,19 @@ async function run(req, options = {}) {
   for (const row of candidates) {
     const fullAddress = [row.address, row.city || "Edina", row.state || "MN", row.zip].filter(Boolean).join(", ");
     try {
+      // Omit productIds deliberately: EagleView returns everything this organization is entitled to,
+      // letting the 26-day evaluation discover which packs add real signal without failing on a single
+      // unauthorized optional pack.
       const submitted = await requestPropertyData({ address: fullAddress, lat: row.lat, lon: row.lon });
       const requestId = findRequestId(submitted);
       let property = null;
       if (requestId) property = await pollResult(requestId);
       const images = property ? extractPropertyImages(property) : [];
 
-      const patch = {
+      await supabase.from("batch_leads").update({
         image_evidence_status: images.length ? "verified" : "requested",
         image_fetched_at: images.length ? new Date().toISOString() : row.image_fetched_at,
-      };
-      // Existing columns only; raw EagleView payload stays server-side in this response until
-      // a dedicated evidence table migration is deployed.
-      await supabase.from("batch_leads").update(patch).eq("id", row.id);
+      }).eq("id", row.id);
 
       results.push({
         id: row.id,
@@ -132,24 +138,19 @@ async function run(req, options = {}) {
         property,
       });
     } catch (e) {
-      results.push({
-        id: row.id,
-        address: fullAddress,
-        distanceMiles: Number(row.distanceMiles.toFixed(3)),
-        priorityScore: row.priority_score,
-        error: e?.message || String(e),
-      });
+      results.push({ id: row.id, address: fullAddress, distanceMiles: Number(row.distanceMiles.toFixed(3)), priorityScore: row.priority_score, error: e?.message || String(e) });
     }
   }
 
   return Response.json({
     ok: true,
     campaign: "edina-interlachen-radius",
+    campaignEnd: CAMPAIGN_END.toISOString(),
     environment: cfg.environment,
     anchor: { ...anchor, requested: requestedAnchor, used: anchorUsed },
     radiusMiles,
     dailyLimit: limit,
-    candidatesInRadius: (rows || []).filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)) && haversineMiles(anchor.lat, anchor.lon, r.lat, r.lon) <= radiusMiles).length,
+    candidatesInRadius: inRadius.length,
     processed: results.length,
     successful: results.filter((r) => !r.error).length,
     withImages: results.filter((r) => r.imageCount > 0).length,
@@ -166,8 +167,6 @@ export async function POST(req) {
 export async function GET(req) {
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
-  if (secret && auth !== `Bearer ${secret}`) {
-    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  if (secret && auth !== `Bearer ${secret}`) return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   return run(req, {});
 }
