@@ -1,0 +1,2 @@
+Production redeploy trigger for AeroLeadAI imagery fallback release.
+Triggered 2026-08-17 03:28 America/Chicago.
