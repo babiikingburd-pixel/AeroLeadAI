@@ -1,15 +1,14 @@
 import { activeProvider } from "../../../lib/aiClient";
-export const dynamic = "force-dynamic";
+import { supabaseServer } from "../../../lib/supabaseServer";
 
-// Self-diagnostic for the Operations Command Center: which subsystems are
-// actually configured and reachable, right now. Reports booleans/status
-// only — never leaks key values. This is real signal (env presence +
-// a live upstream ping), not a simulated uptime percentage.
-async function pingUrl(url, ms = 4000) {
+export const dynamic = "force-dynamic";
+export const maxDuration = 12;
+
+async function pingUrl(url, ms = 3500) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
   try {
-    const res = await fetch(url, { signal: controller.signal, method: "GET" });
+    const res = await fetch(url, { signal: controller.signal, method: "GET", cache: "no-store" });
     return res.ok || res.status < 500;
   } catch {
     return false;
@@ -18,26 +17,113 @@ async function pingUrl(url, ms = 4000) {
   }
 }
 
-export async function GET() {
-  const aiProvider = activeProvider();
-  const hasSupabase = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY));
-  const imageryProvider = process.env.NEARMAP_API_KEY ? "nearmap" : process.env.GOOGLE_MAPS_API_KEY ? "google" : process.env.MAPBOX_TOKEN ? "mapbox" : "esri-free";
+async function timed(name, fn, timeoutMs = 6000) {
+  const started = Date.now();
+  return Promise.race([
+    Promise.resolve().then(fn)
+      .then(value => ({ name, ok: true, ms: Date.now() - started, value }))
+      .catch(error => ({ name, ok: false, ms: Date.now() - started, error: error?.message || String(error) })),
+    new Promise(resolve => setTimeout(() => resolve({ name, ok: false, ms: Date.now() - started, error: `timeout after ${timeoutMs}ms` }), timeoutMs)),
+  ]);
+}
 
-  const [overpassUp, nominatimUp, nwsUp] = await Promise.all([
+export async function GET() {
+  const db = supabaseServer();
+  const aiProvider = activeProvider();
+  const imageryProvider = process.env.EAGLEVIEW_CLIENT_ID || process.env.EAGLEVIEW_API_KEY
+    ? "eagleview"
+    : process.env.NEARMAP_API_KEY
+      ? "nearmap"
+      : process.env.GOOGLE_MAPS_API_KEY
+        ? "google"
+        : process.env.MAPBOX_TOKEN
+          ? "mapbox"
+          : "esri-free";
+
+  const [properties, contractors, top100, jobs, overpassUp, nominatimUp, nwsUp] = await Promise.all([
+    timed("supabase_properties", async () => {
+      if (!db) throw new Error("Supabase not configured");
+      const { data, error, count } = await db.from("batch_leads")
+        .select("id,priority_score,confidence_score", { count: "exact" })
+        .eq("sales_status", "new")
+        .limit(1);
+      if (error) throw error;
+      return { activeProperties: count ?? null, sampleAvailable: !!data?.[0] };
+    }),
+    timed("contractor_network", async () => {
+      if (!db) throw new Error("Supabase not configured");
+      const { data, error, count } = await db.from("contractor_candidates")
+        .select("id,business_name,service_area_cities,prospect_score", { count: "exact" })
+        .eq("prospect", true)
+        .order("prospect_score", { ascending: false })
+        .limit(3);
+      if (error) throw error;
+      return { contractors: count ?? null, sample: data || [] };
+    }),
+    timed("top100", async () => {
+      if (!db) throw new Error("Supabase not configured");
+      const { data, error } = await db.from("batch_leads")
+        .select("id,address,city,priority_score,confidence_score,image_evidence_status")
+        .eq("sales_status", "new")
+        .neq("review_status", "rejected")
+        .gt("priority_score", 0)
+        .order("priority_score", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      const rows = data || [];
+      return {
+        visible: rows.length,
+        confidence70Plus: rows.filter(r => Number(r.confidence_score || 0) >= 70).length,
+        imageryMarked: rows.filter(r => ["fetched", "verified", "ready"].includes(String(r.image_evidence_status || "").toLowerCase())).length,
+      };
+    }),
+    timed("validation_queue", async () => {
+      if (!db) throw new Error("Supabase not configured");
+      const { data, error } = await db.from("twincities_validation_jobs")
+        .select("id,status,priority,reason")
+        .in("status", ["queued", "running"])
+        .order("priority", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return { activeJobs: data?.length || 0 };
+    }),
     pingUrl("https://overpass-api.de/api/interpreter?data=[out:json];out;"),
     pingUrl("https://nominatim.openstreetmap.org/status.php"),
     pingUrl("https://api.weather.gov/"),
   ]);
 
-  const checks = [
-    { name: "AI provider (damage/lead scoring)", ok: !!aiProvider, detail: aiProvider || "none configured — set GROQ_API_KEY or ANTHROPIC_API_KEY" },
-    { name: "Imagery provider", ok: true, detail: imageryProvider },
-    { name: "Supabase (durable storage, jobs, contractors, portal)", ok: hasSupabase, detail: hasSupabase ? "configured" : "not configured — falls back to localStorage where possible; jobs/contractors need it" },
-    { name: "Discovery sources (Overpass)", ok: overpassUp, detail: overpassUp ? "reachable" : "unreachable right now" },
-    { name: "Geocoding (Nominatim)", ok: nominatimUp, detail: nominatimUp ? "reachable" : "unreachable right now" },
-    { name: "Weather (NWS)", ok: nwsUp, detail: nwsUp ? "reachable" : "unreachable right now" },
-    { name: "Rate limiting", ok: true, detail: `${process.env.RATE_LIMIT_PER_MIN || 60}/min default (middleware.js)` },
-  ];
+  const dataChecks = [properties, contractors, top100, jobs];
+  const readPathOk = properties.ok && contractors.ok && top100.ok;
+  const workerReadOk = jobs.ok;
+  const external = {
+    overpass: overpassUp,
+    nominatim: nominatimUp,
+    nws: nwsUp,
+  };
 
-  return Response.json({ ok: true, checkedAt: new Date().toISOString(), healthy: checks.every((c) => c.ok), checks });
+  const mode = readPathOk
+    ? (workerReadOk ? "OPERATIONAL_READ_PATH" : "READ_PATH_OK_WORKER_DEGRADED")
+    : "DEGRADED";
+
+  return Response.json({
+    ok: readPathOk,
+    healthy: readPathOk && workerReadOk,
+    mode,
+    checkedAt: new Date().toISOString(),
+    configured: {
+      aiProvider: aiProvider || null,
+      imageryProvider,
+      supabase: !!db,
+      cronSecret: !!process.env.CRON_SECRET,
+    },
+    dataChecks,
+    external,
+    standards: {
+      fakeDataAllowed: false,
+      silentFailuresAllowed: false,
+      cachedDataMustBeLabeled: true,
+      queuedActionsMustBeLabeled: true,
+      confidenceMustComeFromEvidence: true,
+    },
+  }, { headers: { "cache-control": "no-store" } });
 }
