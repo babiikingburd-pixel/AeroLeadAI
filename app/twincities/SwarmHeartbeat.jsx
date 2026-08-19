@@ -14,19 +14,20 @@ export default function SwarmHeartbeat() {
       if (cancelled || running.current || document.hidden || !navigator.onLine) return;
       running.current = true;
       try {
+        const rawFetch = window.__AEROLEAD_NATIVE_FETCH__ || window.fetch.bind(window);
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 15_000);
         await Promise.allSettled([
-          fetch("/api/twincities/evidence-cycle", {
+          rawFetch("/api/twincities/evidence-cycle", {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", "x-aerolead-background": "1" },
             body: JSON.stringify({ limit: 3, source: "twincities-heartbeat" }),
             cache: "no-store",
             signal: controller.signal,
           }),
-          fetch("/api/twincities/autonomous-cycle", {
+          rawFetch("/api/twincities/autonomous-cycle", {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", "x-aerolead-background": "1" },
             body: JSON.stringify({ source: "twincities-heartbeat", lightweight: true }),
             cache: "no-store",
             signal: controller.signal,
@@ -34,7 +35,8 @@ export default function SwarmHeartbeat() {
         ]);
         clearTimeout(timeout);
       } catch {
-        // ClientSafetyNet queues constrained writes. The UI must never stall on heartbeat work.
+        // Background maintenance can fail silently at the transport layer because it is not a user action.
+        // Health/status UI reports the degraded server state; no fake completion and no client action is queued.
       } finally {
         running.current = false;
       }
