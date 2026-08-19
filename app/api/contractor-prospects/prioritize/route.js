@@ -1,10 +1,4 @@
-// Prioritize a contractor prospect: bumps their prospect_score above the
-// current highest score (so they sort to the very top of the Prospect
-// Bench), then immediately recomputes their lead list live — the same
-// scoring pipeline /api/contractor-prospects?name= already runs on every
-// call, so "recalibrating" isn't a separate stale cache to invalidate,
-// it's just running that live query right now and handing back fresh
-// numbers ready to present.
+// Prioritize a contractor prospect, then immediately rebuild its live lead list.
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { calculatePriority } from "../../../../lib/twincities/priorityEngine";
 export const dynamic = "force-dynamic";
@@ -29,6 +23,39 @@ function scoreRow(row) {
     gutterIndicator: row.damage_notes?.gutterIndicator === true,
   });
   return { ...row, _score: result.priorityScore, evidenceScore: result.evidenceScore, confidenceScore: result.confidenceScore, entered: result.entered };
+}
+
+function normalizedAddress(row) {
+  return String(row.address || row.property_address || "")
+    .toLowerCase()
+    .replace(/\b(apt|apartment|unit|suite|ste|#)\s*[a-z0-9-]+\b/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+}
+
+function propertyKey(row) {
+  return String(row.parcel_id || row.pid || row.property_id || row.apn || normalizedAddress(row) || `${row.lat || ""},${row.lon || ""}`);
+}
+
+function isLikelySingleFamily(row) {
+  const type = String(row.property_type || row.building_type || row.land_use || row.use_code || row.occupancy || row.property_class || "").toLowerCase();
+  const addr = String(row.address || row.property_address || "").toLowerCase();
+  const badType = /(apartment|multi[- ]?family|multifamily|condo|condominium|townhome|townhouse|commercial|retail|office|industrial|mixed use|assisted living|senior living|hotel|motel)/;
+  const unitAddress = /\b(apt|apartment|unit|suite|ste)\b|#\s*[a-z0-9-]+/;
+  if (badType.test(type) || unitAddress.test(addr)) return false;
+  if (Number(row.units || row.unit_count || row.dwelling_units || 1) > 1) return false;
+  return true;
+}
+
+function dedupeResidential(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    if (!isLikelySingleFamily(row)) return false;
+    const key = propertyKey(row);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export async function POST(req) {
@@ -58,19 +85,18 @@ export async function POST(req) {
   if (updateErr) return Response.json({ ok: false, error: updateErr.message }, { status: 500 });
   if (!updated) return Response.json({ ok: false, error: "Contractor prospect not found." }, { status: 404 });
 
-  // Recalibrate: live-score every property in this contractor's service
-  // area right now, same as the standard ?name= lookup.
-  const cities = updated.service_area_cities || [];
-  let leadQuery = supabase.from("batch_leads").select("*").eq("sales_status", "new").limit(500);
+  const isApex = /\bapex\b/i.test(updated.business_name || "");
+  const cities = isApex ? ["Apple Valley","Eagan","Burnsville","Lakeville","Rosemount"] : (updated.service_area_cities || []);
+  let leadQuery = supabase.from("batch_leads").select("*").eq("sales_status", "new").limit(1000);
   if (cities.length) leadQuery = leadQuery.in("city", cities);
   const { data: rows, error: leadsErr } = await leadQuery;
   if (leadsErr) return Response.json({ ok: true, contractor: updated, leads: [], note: "Prioritized, but lead recalibration failed: " + leadsErr.message });
 
-  const leads = (rows || [])
+  const leads = dedupeResidential((rows || [])
     .map(scoreRow)
     .filter((r) => r.entered && r._score > 0)
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 10);
+    .sort((a, b) => b._score - a._score))
+    .slice(0, isApex ? 50 : 10);
 
   return Response.json({ ok: true, contractor: updated, leads, newTopScore: newScore });
 }
