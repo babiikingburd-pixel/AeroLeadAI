@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/twincities/network-pulse",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/heartbeat",
       "schedule": "0 9 * * *"
     },
