@@ -43,12 +43,13 @@ export async function GET() {
   const [properties, contractors, top100, jobs, overpassUp, nominatimUp, nwsUp] = await Promise.all([
     timed("supabase_properties", async () => {
       if (!db) throw new Error("Supabase not configured");
-      const { data, error, count } = await db.from("batch_leads")
-        .select("id,priority_score,confidence_score", { count: "exact" })
+      const { data, error } = await db.from("batch_leads")
+        .select("id,priority_score,confidence_score")
         .eq("sales_status", "new")
+        .order("priority_score", { ascending: false, nullsFirst: false })
         .limit(1);
       if (error) throw error;
-      return { activeProperties: count ?? null, sampleAvailable: !!data?.[0] };
+      return { reachable: true, sampleAvailable: !!data?.[0] };
     }),
     timed("contractor_network", async () => {
       if (!db) throw new Error("Supabase not configured");
@@ -95,27 +96,15 @@ export async function GET() {
   const dataChecks = [properties, contractors, top100, jobs];
   const readPathOk = properties.ok && contractors.ok && top100.ok;
   const workerReadOk = jobs.ok;
-  const external = {
-    overpass: overpassUp,
-    nominatim: nominatimUp,
-    nws: nwsUp,
-  };
-
-  const mode = readPathOk
-    ? (workerReadOk ? "OPERATIONAL_READ_PATH" : "READ_PATH_OK_WORKER_DEGRADED")
-    : "DEGRADED";
+  const external = { overpass: overpassUp, nominatim: nominatimUp, nws: nwsUp };
+  const mode = readPathOk ? (workerReadOk ? "OPERATIONAL_READ_PATH" : "READ_PATH_OK_WORKER_DEGRADED") : "DEGRADED";
 
   return Response.json({
     ok: readPathOk,
     healthy: readPathOk && workerReadOk,
     mode,
     checkedAt: new Date().toISOString(),
-    configured: {
-      aiProvider: aiProvider || null,
-      imageryProvider,
-      supabase: !!db,
-      cronSecret: !!process.env.CRON_SECRET,
-    },
+    configured: { aiProvider: aiProvider || null, imageryProvider, supabase: !!db, cronSecret: !!process.env.CRON_SECRET },
     dataChecks,
     external,
     standards: {
