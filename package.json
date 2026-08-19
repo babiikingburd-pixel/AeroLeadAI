@@ -1,6 +1,6 @@
 {
-  "name": "property-intelligence-console",
-  "version": "1.15.0-apex15-max",
+  "name": "aeroleadai-v23-gatekeeper-clean-audit",
+  "version": "23.0.0",
   "private": true,
   "scripts": {
     "apex:14-audit": "node scripts/apex14-max-audit.mjs",
