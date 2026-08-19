@@ -1,182 +1,69 @@
 "use client";
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { HUD } from "../../lib/hudTheme";
 
-const TIERS = [
-  { key: "review", label: "Top 100 Human Review", cap: 100 },
-  { key: "candidates", label: "Top 500 Candidates", cap: 500 },
-  { key: "contractor", label: "Top 20 Contractor Package", cap: 20 },
-];
+const TIERS=[{key:"review",label:"Top 100 Human Review",cap:100},{key:"candidates",label:"Top 500 Candidates",cap:500},{key:"contractor",label:"Top 20 Contractor Package",cap:20}];
+const COUNTY_LABEL={hennepin:"Hennepin",ramsey:"Ramsey",dakota:"Dakota",scott:"Scott",carver:"Carver",anoka:"Anoka"};
+const REVIEW_COLOR={pending:HUD.amber,approved:HUD.green,partial:HUD.cyan,rejected:HUD.red,needs_images:HUD.muted,contractor_sent:HUD.cyan};
 
-const COUNTY_LABEL = { hennepin: "Hennepin", ramsey: "Ramsey", dakota: "Dakota", scott: "Scott", carver: "Carver", anoka: "Anoka" };
-const REVIEW_COLOR = { pending: HUD.amber, approved: HUD.green, partial: HUD.cyan, rejected: HUD.red, needs_images: HUD.muted, contractor_sent: HUD.cyan };
+export default function TwinCitiesPriorityPage(){
+  const [tier,setTier]=useState("review"),[leads,setLeads]=useState([]),[loading,setLoading]=useState(false),[error,setError]=useState(null),[meta,setMeta]=useState(null),[expanded,setExpanded]=useState(null),[imageLead,setImageLead]=useState(null),[crawling,setCrawling]=useState(false),[crawlStatus,setCrawlStatus]=useState(null);
 
-export default function TwinCitiesPriorityPage() {
-  const [tier, setTier] = useState("review");
-  const [leads, setLeads] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [meta, setMeta] = useState(null);
-  const [expanded, setExpanded] = useState(null);
-  const [selected, setSelected] = useState({});
-  const [contractorName, setContractorName] = useState("");
-  const [exportStatus, setExportStatus] = useState(null);
-  const [crawling, setCrawling] = useState(false);
-  const [crawlStatus, setCrawlStatus] = useState(null);
-  const [showingCache, setShowingCache] = useState(false);
-  const [cacheTimestamp, setCacheTimestamp] = useState(null);
+  const load=useCallback(async(t)=>{setLoading(true);setError(null);try{const res=await fetch(`/api/top-leads?tier=${t}&_=${Date.now()}`,{cache:"no-store"});const data=await res.json();if(!data.ok)throw new Error(data.error||"Unable to load leads");setLeads(data.leads||[]);setMeta({scanned:data.scanned,entered:data.entered,cap:data.cap,top100Count:data.top100Count,top500Count:data.top500Count});}catch(e){setError(e.message)}finally{setLoading(false)}},[]);
+  useEffect(()=>{load(tier)},[tier,load]);
 
-  const cacheKey = (t) => `twincities_cache_v2_${t}`;
+  function chooseTier(next){if(next===tier)load(next);else setTier(next);setExpanded(null)}
+  async function setReviewStatus(id,status){setLeads(cur=>cur.map(l=>l.id===id?{...l,reviewStatus:status}:l));try{await fetch("/api/lead-review",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id,status})})}catch{}}
+  async function runEvidenceCycle(){setCrawling(true);setCrawlStatus({ok:true,message:"Searching permits, storm/weather and imagery for the strongest unresolved properties…"});try{const res=await fetch("/api/twincities/evidence-cycle",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({limit:8})});const data=await res.json();setCrawlStatus({ok:!!data.ok,message:data.ok?`Evidence swarm processed ${data.processed}; ${data.persisted??data.processed} persisted. Reloading confidence…`:(data.error||"Evidence cycle failed")});if(data.ok)await load(tier)}catch(e){setCrawlStatus({ok:false,message:e.message})}finally{setCrawling(false)}}
 
-  const loadFromCache = (t) => {
-    try {
-      const raw = localStorage.getItem(cacheKey(t));
-      if (!raw) return false;
-      const cached = JSON.parse(raw);
-      setLeads(cached.leads || []);
-      setMeta(cached.meta || null);
-      setCacheTimestamp(cached.timestamp);
-      setShowingCache(true);
-      return true;
-    } catch { return false; }
-  };
+  return <main style={{minHeight:"100vh",background:HUD.bg,color:HUD.ice,fontFamily:HUD.fontMono,padding:"20px 24px"}}>
+    <div style={{maxWidth:1500,margin:"0 auto"}}>
+      <div style={{fontFamily:HUD.fontDisplay,fontSize:24,fontWeight:800,color:HUD.cyan,letterSpacing:".04em"}}>TWIN CITIES PRIORITY ENGINE</div>
+      <div style={{fontSize:12,color:HUD.muted,margin:"5px 0 16px"}}>Top 100 is the human-review front line. Top 500 is the live ranked pool. Every property card now opens its imagery and a full scorecard.</div>
 
-  const saveToCache = (t, leadsData, metaData) => {
-    try { localStorage.setItem(cacheKey(t), JSON.stringify({ leads: leadsData, meta: metaData, timestamp: Date.now() })); } catch {}
-  };
-
-  const load = useCallback(async (t) => {
-    setLoading(true);
-    setError(null);
-    const hadCache = loadFromCache(t);
-    try {
-      const res = await fetch(`/api/top-leads?tier=${t}`, { cache: "no-store" });
-      const data = await res.json();
-      if (data.ok) {
-        setLeads(data.leads || []);
-        const m = { scanned: data.scanned, entered: data.entered, cap: data.cap, top100Count: data.top100Count, top500Count: data.top500Count };
-        setMeta(m);
-        setShowingCache(false);
-        saveToCache(t, data.leads || [], m);
-      } else if (!hadCache) {
-        setError(data.error || data.note || "Unknown error");
-        setLeads([]);
-      }
-    } catch (e) {
-      if (!hadCache) setError(e.message);
-    } finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { load(tier); }, [tier, load]);
-
-  async function setReviewStatus(id, status) {
-    setLeads((cur) => cur.map((l) => (l.id === id ? { ...l, reviewStatus: status } : l)));
-    await fetch("/api/lead-review", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, status }) });
-  }
-
-  function toggleSelect(id) { setSelected((cur) => ({ ...cur, [id]: !cur[id] })); }
-
-  async function fetchImages() {
-    setCrawling(true); setCrawlStatus(null);
-    try {
-      const res = await fetch("/api/image-crawler?limit=25");
-      const data = await res.json();
-      if (data.ok) setCrawlStatus({ ok: true, message: data.note || `Processed ${data.processed} · Google ${data.google} · Mapbox ${data.mapbox} · Esri ${data.esri} · Failed ${data.failed}. Click again for the next batch.` });
-      else setCrawlStatus({ ok: false, message: data.error || "Image crawl failed." });
-    } catch (e) { setCrawlStatus({ ok: false, message: e.message }); }
-    finally { setCrawling(false); }
-  }
-
-  async function runEvidenceCycle() {
-    setCrawling(true);
-    setCrawlStatus({ ok: true, message: "Tightening the Top 100 and Top 500: imagery + permits + weather + rescoring…" });
-    try {
-      const res = await fetch("/api/twincities/evidence-cycle", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ limit: 8 }) });
-      const data = await res.json();
-      setCrawlStatus({ ok: !!data.ok, message: data.ok ? `Evidence cycle processed ${data.processed}. Rankings refreshed.` : (data.error || "Evidence cycle failed.") });
-      if (data.ok) await load(tier);
-    } catch (e) { setCrawlStatus({ ok: false, message: e.message }); }
-    finally { setCrawling(false); }
-  }
-
-  async function exportToContractor() {
-    const leadIds = Object.keys(selected).filter((id) => selected[id]);
-    if (!contractorName.trim() || leadIds.length === 0) {
-      setExportStatus({ ok: false, message: "Enter a contractor name and select at least one lead." });
-      return;
-    }
-    setExportStatus({ ok: null, message: "Exporting…" });
-    const res = await fetch("/api/contractor-export", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contractorName, leadIds, tier: `${tier}_${TIERS.find((t) => t.key === tier)?.cap}` }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setExportStatus({ ok: true, message: `Exported ${leadIds.length} leads to ${contractorName}.` });
-      setSelected({}); load(tier);
-    } else setExportStatus({ ok: false, message: data.error || "Export failed." });
-  }
-
-  return (
-    <div style={{ minHeight: "100vh", background: HUD.bg, color: HUD.ice, fontFamily: HUD.fontMono, padding: "20px 24px" }}>
-      <div style={{ marginBottom: 4, fontFamily: HUD.fontDisplay, fontSize: 20, fontWeight: 700, color: HUD.cyan, letterSpacing: "0.04em" }}>TWIN CITIES PRIORITY ENGINE</div>
-      <div style={{ fontSize: 12, color: HUD.muted, marginBottom: 18 }}>Top 100 is the human-review front line. Top 500 is the ranked candidate pool behind it. Hennepin · Ramsey · Dakota · Scott · Carver · Anoka.</div>
-
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-        {TIERS.map((t) => (
-          <button key={t.key} onClick={() => setTier(t.key)} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${tier === t.key ? HUD.cyan : HUD.lineDim}`, background: tier === t.key ? "rgba(95,224,255,0.08)" : "transparent", color: tier === t.key ? HUD.cyan : HUD.muted }}>{t.label}</button>
-        ))}
-        <button onClick={() => load(tier)} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.green }}>↻ Refresh</button>
-        <button onClick={() => window.open("/twincities/contractor-prospects", "_blank", "noopener,noreferrer")} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.green}`, background: "rgba(61,220,151,0.08)", color: HUD.green }}>🏠 Contractor Prospects + Pitches</button>
-        <button onClick={() => window.open("/twincities/apex10", "_blank", "noopener,noreferrer")} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.amber}`, background: "rgba(255,190,80,0.08)", color: HUD.amber }}>🎯 APEX 10 Report</button>
-        <button onClick={runEvidenceCycle} disabled={crawling} style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.cyan}`, background: "rgba(95,224,255,0.08)", color: HUD.cyan, opacity: crawling ? 0.6 : 1 }}>{crawling ? "🧠 Tightening…" : "🧠 Tighten Top 100 + 500"}</button>
-        <button onClick={fetchImages} disabled={crawling} style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.amber, opacity: crawling ? 0.6 : 1 }}>{crawling ? "📷 Fetching…" : "📷 Images (next 25)"}</button>
+      <div style={{display:"flex",gap:9,flexWrap:"wrap",marginBottom:12}}>
+        {TIERS.map(t=><button key={t.key} onClick={()=>chooseTier(t.key)} style={button(tier===t.key?HUD.cyan:HUD.lineDim,tier===t.key?HUD.cyan:HUD.muted)}>{t.label}</button>)}
+        <button onClick={()=>load(tier)} style={button(HUD.green,HUD.green)}>↻ REFRESH</button>
+        <button onClick={()=>window.open("/twincities/contractor-prospects","_blank","noopener,noreferrer")} style={button(HUD.green,HUD.green)}>🏠 CONTRACTOR PROSPECTS</button>
+        <button onClick={()=>window.open("/twincities/apex10","_blank","noopener,noreferrer")} style={button(HUD.amber,HUD.amber)}>🎯 APEX REPORT</button>
+        <button disabled={crawling} onClick={runEvidenceCycle} style={{...button(HUD.cyan,HUD.cyan),opacity:crawling?.55:1}}>{crawling?"🧠 SEARCHING…":"🧠 RUN EVIDENCE SWARM"}</button>
       </div>
 
-      {crawlStatus && <div style={{ fontSize: 11, color: crawlStatus.ok ? HUD.green : HUD.red, marginBottom: 12 }}>{crawlStatus.message}</div>}
-      {meta && <div style={{ fontSize: 11, color: HUD.muted, marginBottom: 12 }}>Scanned {meta.scanned ?? 0} · Ranked {meta.entered ?? 0} · Top 100 {meta.top100Count ?? 0}/100 · Top 500 {meta.top500Count ?? 0}/500 · Viewing cap {meta.cap}</div>}
-      {showingCache && cacheTimestamp && <div style={{ fontSize: 12, color: HUD.amber, marginBottom: 12, padding: "8px 12px", border: `1px solid ${HUD.amber}`, borderRadius: 4 }}>📴 Showing cached data from {new Date(cacheTimestamp).toLocaleString()} — live refresh {loading ? "in progress…" : "failed or hasn't run yet"}.</div>}
-      {loading && <div style={{ color: HUD.muted, fontSize: 13 }}>Ranking properties…</div>}
-      {error && <div style={{ color: HUD.red, fontSize: 13, marginBottom: 12 }}>Error: {error}</div>}
+      {meta&&<div style={{fontSize:11,color:HUD.muted,marginBottom:10}}>Scanned {meta.scanned??0} · Ranked {meta.entered??0} · Top 100 {meta.top100Count??0}/100 · Top 500 {meta.top500Count??0}/500 · Viewing {meta.cap}</div>}
+      {crawlStatus&&<div style={{fontSize:11,color:crawlStatus.ok?HUD.green:HUD.red,marginBottom:12,padding:"8px 10px",border:`1px solid ${crawlStatus.ok?HUD.green:HUD.red}`,borderRadius:5}}>{crawlStatus.message}</div>}
+      {loading&&<div style={{color:HUD.cyan,fontSize:12,marginBottom:10}}>RANKING + RENDERING PROPERTIES…</div>}
+      {error&&<div style={{color:HUD.red,fontSize:12,marginBottom:10}}>Error: {error}</div>}
 
-      {tier === "contractor" && (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, padding: 12, border: `1px solid ${HUD.lineDim}`, borderRadius: 4 }}>
-          <input value={contractorName} onChange={(e) => setContractorName(e.target.value)} placeholder="Contractor name…" style={{ padding: "7px 10px", background: "transparent", border: `1px solid ${HUD.lineDim}`, borderRadius: 4, color: HUD.ice, fontSize: 12, minWidth: 200 }} />
-          <button onClick={exportToContractor} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.green}`, background: "rgba(61,220,151,0.08)", color: HUD.green }}>Export selected ({Object.values(selected).filter(Boolean).length}) →</button>
-          {exportStatus && <span style={{ fontSize: 12, color: exportStatus.ok ? HUD.green : exportStatus.ok === false ? HUD.red : HUD.muted }}>{exportStatus.message}</span>}
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {leads.map((lead, idx) => (
-          <div key={lead.id} style={{ border: `1px solid ${HUD.lineDim}`, borderRadius: 4, padding: "10px 14px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 36, color: HUD.cyan, fontSize: 12, fontWeight: 800 }}>#{lead.rank || idx + 1}</div>
-              {tier === "contractor" && <input type="checkbox" checked={!!selected[lead.id]} onChange={() => toggleSelect(lead.id)} />}
-              {lead.imageUrl ? <img src={lead.imageUrl} alt={lead.address} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4, flexShrink: 0, border: `1px solid ${HUD.lineDim}` }} /> : <div title="No image yet" style={{ width: 64, height: 64, flexShrink: 0, borderRadius: 4, border: `1px dashed ${HUD.lineDim}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: HUD.muted, textAlign: "center", padding: 4 }}>no image yet</div>}
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700 }}>{lead.address}</div><div style={{ fontSize: 11, color: HUD.muted }}>{lead.city} · {COUNTY_LABEL[lead.county] || lead.county} County</div></div>
-              <div style={{ textAlign: "right", fontSize: 11, color: HUD.muted }}>Evidence <span style={{ color: HUD.ice, fontWeight: 700 }}>{lead.evidenceScore}</span> · Confidence <span style={{ color: HUD.ice, fontWeight: 700 }}>{lead.confidenceScore}%</span></div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: HUD.cyan, minWidth: 60, textAlign: "right" }}>{lead.priorityScore}</div>
-              <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 10, color: REVIEW_COLOR[lead.reviewStatus] || HUD.muted, border: `1px solid ${REVIEW_COLOR[lead.reviewStatus] || HUD.muted}` }}>{lead.reviewStatus?.toUpperCase()}</span>
-              <button onClick={() => setExpanded(expanded === lead.id ? null : lead.id)} style={{ padding: "5px 10px", fontSize: 11, cursor: "pointer", background: "transparent", border: `1px solid ${HUD.lineDim}`, borderRadius: 4, color: HUD.muted }}>{expanded === lead.id ? "Hide" : "Why?"}</button>
-            </div>
-
-            {expanded === lead.id && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${HUD.lineDim}`, display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
-                <div style={{ fontSize: 11, color: HUD.muted }}><div style={{ color: HUD.ice, fontWeight: 700, marginBottom: 4 }}>Evidence breakdown</div>{Object.entries(lead.breakdown || {}).map(([k, v]) => <div key={k}>{k.replace(/_/g, " ")}: <span style={{ color: HUD.ice }}>{v}</span></div>)}{(!lead.breakdown || Object.keys(lead.breakdown).length === 0) && <div>No breakdown recorded.</div>}</div>
-                <div style={{ fontSize: 11, color: HUD.muted }}><div style={{ color: HUD.ice, fontWeight: 700, marginBottom: 4 }}>Assessed value</div>{lead.assessedValue ? `$${lead.assessedValue.toLocaleString()}` : "Not enriched yet"}</div>
-                <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-                  <button onClick={() => setReviewStatus(lead.id, "approved")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.green}`, background: "transparent", color: HUD.green, borderRadius: 4 }}>Approve</button>
-                  <button onClick={() => setReviewStatus(lead.id, "partial")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.cyan}`, background: "transparent", color: HUD.cyan, borderRadius: 4 }}>Partial</button>
-                  <button onClick={() => setReviewStatus(lead.id, "needs_images")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.muted}`, background: "transparent", color: HUD.muted, borderRadius: 4 }}>Needs images</button>
-                  <button onClick={() => setReviewStatus(lead.id, "rejected")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.red}`, background: "transparent", color: HUD.red, borderRadius: 4 }}>Reject</button>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-        {!loading && leads.length === 0 && !error && <div style={{ color: HUD.muted, fontSize: 13, padding: 20, textAlign: "center" }}>No qualifying properties in this tier yet.</div>}
-      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:9}}>{leads.map((lead,idx)=><LeadRow key={lead.id} lead={lead} idx={idx} tier={tier} expanded={expanded===lead.id} toggle={()=>setExpanded(expanded===lead.id?null:lead.id)} openImage={()=>setImageLead(lead)} review={setReviewStatus}/>)}</div>
     </div>
-  );
+    {imageLead&&<ImageViewer lead={imageLead} close={()=>setImageLead(null)}/>} 
+  </main>
 }
+
+function LeadRow({lead,idx,tier,expanded,toggle,openImage,review}){
+  const status=lead.sourceStatus||{};const sourceCount=[status.permit,status.storm,status.assessor,status.imagery].filter(Boolean).length;
+  return <article style={{border:`1px solid ${expanded?HUD.cyan:HUD.lineDim}`,borderRadius:7,background:"rgba(5,14,20,.72)",overflow:"hidden"}}>
+    <div style={{display:"grid",gridTemplateColumns:"46px 78px minmax(220px,1fr) minmax(210px,.75fr) 92px 110px",gap:12,alignItems:"center",padding:"11px 13px"}}>
+      <div style={{color:HUD.cyan,fontSize:13,fontWeight:900}}>#{lead.rank||idx+1}</div>
+      <button onClick={openImage} title="Open property imagery" style={{padding:0,border:`1px solid ${HUD.lineDim}`,borderRadius:5,overflow:"hidden",height:68,width:68,background:"#020608",cursor:"zoom-in"}}>{lead.imageUrl?<img src={lead.imageUrl} alt={lead.address} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>:<span style={{fontSize:9,color:HUD.muted}}>NO IMAGE</span>}</button>
+      <div><div style={{fontSize:13,fontWeight:800,lineHeight:1.25}}>{lead.address}</div><div style={{fontSize:11,color:HUD.muted,marginTop:3}}>{lead.city} · {COUNTY_LABEL[lead.county]||lead.county} County</div><div style={{fontSize:9,color:lead.imageIsFallback?HUD.amber:HUD.green,marginTop:4}}>{lead.imageIsFallback?"ESRI FALLBACK — CLICKABLE":"CACHED/PROVIDER IMAGE — CLICKABLE"}</div></div>
+      <div><div style={{fontSize:11,color:HUD.muted}}>Evidence <b style={{color:HUD.ice}}>{lead.evidenceScore}</b> · Confidence <b style={{color:lead.confidenceScore>=70?HUD.green:lead.confidenceScore>=35?HUD.amber:HUD.red}}>{lead.confidenceScore}%</b></div><div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:7}}><SourcePill label="PERMIT" ok={status.permit}/><SourcePill label="STORM" ok={status.storm}/><SourcePill label="VALUE" ok={status.assessor}/><SourcePill label="IMAGE" ok={status.imagery}/></div><div style={{fontSize:9,color:HUD.muted,marginTop:5}}>{sourceCount}/4 machine evidence lanes complete</div></div>
+      <div style={{fontSize:19,fontWeight:900,color:HUD.cyan,textAlign:"right"}}>{lead.priorityScore}</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"stretch"}}><span style={{fontSize:9,fontWeight:800,padding:"4px 7px",borderRadius:10,textAlign:"center",color:REVIEW_COLOR[lead.reviewStatus]||HUD.muted,border:`1px solid ${REVIEW_COLOR[lead.reviewStatus]||HUD.muted}`}}>{String(lead.reviewStatus||"pending").toUpperCase()}</span><button onClick={toggle} style={button(HUD.cyan,HUD.cyan)}>{expanded?"HIDE":"SCORECARD"}</button></div>
+    </div>
+    {expanded&&<Scorecard lead={lead} tier={tier} review={review} openImage={openImage}/>} 
+  </article>
+}
+
+function Scorecard({lead,tier,review,openImage}){const status=lead.sourceStatus||{};return <div style={{borderTop:`1px solid ${HUD.lineDim}`,padding:14,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,background:"rgba(0,0,0,.22)"}}>
+  <Panel title="WHY THIS RANK"><div style={{fontSize:12}}>Priority score <b style={{color:HUD.cyan}}>{lead.priorityScore}</b></div><div style={{fontSize:11,color:HUD.muted,marginTop:6}}>Evidence {lead.evidenceScore} · Confidence {lead.confidenceScore}% · Tier {lead.tier||"—"}</div><div style={{marginTop:8}}>{Object.entries(lead.breakdown||{}).map(([k,v])=><div key={k} style={{fontSize:10,color:HUD.muted,margin:"3px 0"}}>{k.replace(/_/g," ")}: <b style={{color:HUD.ice}}>{String(v)}</b></div>)}</div></Panel>
+  <Panel title="CONFIDENCE SOURCES"><SourceLine label="Permit search" ok={status.permit}/><SourceLine label="Storm/weather search" ok={status.storm}/><SourceLine label="Assessor/value" ok={status.assessor}/><SourceLine label="Imagery evidence" ok={status.imagery}/><div style={{fontSize:9,color:HUD.muted,marginTop:7}}>Confidence rises only when a real evidence lane is completed; it is not padded by default false values.</div></Panel>
+  <Panel title="PROPERTY"><div style={{fontSize:11,color:HUD.muted}}>Assessed value</div><div style={{fontSize:17,fontWeight:800,marginTop:3}}>{lead.assessedValue?`$${Number(lead.assessedValue).toLocaleString()}`:"Not enriched"}</div><button onClick={openImage} style={{...button(HUD.cyan,HUD.cyan),marginTop:10}}>OPEN IMAGE</button><a href={lead.googleMapsUrl} target="_blank" rel="noreferrer" style={{...button(HUD.green,HUD.green),display:"block",textAlign:"center",textDecoration:"none",marginTop:7}}>OPEN GOOGLE MAPS ↗</a></Panel>
+  <Panel title="HUMAN REVIEW"><div style={{fontSize:10,color:HUD.muted,marginBottom:8}}>Top 100 is a review queue, so these controls stay directly on the scorecard.</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button onClick={()=>review(lead.id,"approved")} style={button(HUD.green,HUD.green)}>APPROVE</button><button onClick={()=>review(lead.id,"partial")} style={button(HUD.cyan,HUD.cyan)}>PARTIAL</button><button onClick={()=>review(lead.id,"needs_images")} style={button(HUD.amber,HUD.amber)}>NEEDS IMAGE</button><button onClick={()=>review(lead.id,"rejected")} style={button(HUD.red,HUD.red)}>REJECT</button></div>{tier==="review"&&<div style={{fontSize:9,color:HUD.amber,marginTop:8}}>Reviewing this property can add the human-confidence component after machine evidence is present.</div>}</Panel>
+</div>}
+
+function ImageViewer({lead,close}){return <div onClick={close} style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,.88)",display:"grid",placeItems:"center",padding:20}}><div onClick={e=>e.stopPropagation()} style={{width:"min(1100px,96vw)",maxHeight:"92vh",overflow:"auto",background:"#041016",border:`1px solid ${HUD.cyan}`,borderRadius:9,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:10}}><div><b>{lead.address}</b><div style={{fontSize:10,color:HUD.muted}}>Clicking the thumbnail now opens this full property view.</div></div><button onClick={close} style={button(HUD.red,HUD.red)}>CLOSE ✕</button></div>{lead.imageUrl?<img src={lead.imageUrl} alt={lead.address} style={{width:"100%",maxHeight:"68vh",objectFit:"contain",background:"#000",display:"block"}}/>:<div style={{height:400,display:"grid",placeItems:"center",color:HUD.muted}}>No image available yet.</div>}<div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}><a href={lead.imageUrl||"#"} target="_blank" rel="noreferrer" style={{...button(HUD.cyan,HUD.cyan),textDecoration:"none"}}>OPEN IMAGE SOURCE ↗</a><a href={lead.googleMapsUrl} target="_blank" rel="noreferrer" style={{...button(HUD.green,HUD.green),textDecoration:"none"}}>OPEN ADDRESS IN GOOGLE MAPS ↗</a></div></div></div>}
+function Panel({title,children}){return <div style={{border:`1px solid ${HUD.lineDim}`,borderRadius:6,padding:11}}><div style={{fontSize:10,color:HUD.cyan,fontWeight:900,letterSpacing:".08em",marginBottom:8}}>{title}</div>{children}</div>}
+function SourcePill({label,ok}){return <span style={{fontSize:8,padding:"3px 5px",borderRadius:8,border:`1px solid ${ok?HUD.green:HUD.lineDim}`,color:ok?HUD.green:HUD.muted}}>{ok?"✓":"○"} {label}</span>}
+function SourceLine({label,ok}){return <div style={{display:"flex",justifyContent:"space-between",fontSize:10,padding:"4px 0",color:HUD.muted}}><span>{label}</span><b style={{color:ok?HUD.green:HUD.amber}}>{ok?"COMPLETE":"SEARCH NEEDED"}</b></div>}
+function button(border,color){return {padding:"7px 10px",borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:800,border:`1px solid ${border}`,background:"rgba(0,0,0,.14)",color}}
