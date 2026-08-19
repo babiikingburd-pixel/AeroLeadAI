@@ -9,7 +9,10 @@ function scoreRow(row) {
     county: row.county,
     yearBuilt: row.year_built,
     permit_within_10y: row.permit_within_10y,
-    permitChecked: !!(row.permit_notes && row.permit_notes.length > 0),
+    permitChecked: ["verified", "none_found"].includes(String(row.permit_evidence_status || "").toLowerCase()) || !!row.permit_checked_at || !!row.permit_notes,
+    stormChecked: row.weather_evidence_status === "verified" || row.storm_evidence_status === "verified" || !!row.weather_checked_at || !!row.storm_checked_at || !!row.storm_date,
+    assessorChecked: Number(row.assessed_value || 0) > 0,
+    imageryChecked: ["verified", "fetched", "ready", "reviewed"].includes(String(row.image_evidence_status || "").toLowerCase()) || !!row.image_fetched_at,
     hailInches: row.hail_inches,
     windMph: row.wind_mph,
     assessedValue: row.assessed_value,
@@ -32,21 +35,14 @@ function normalizedAddress(row) {
     .replace(/[^a-z0-9]/g, "")
     .trim();
 }
-
-function propertyKey(row) {
-  return String(row.parcel_id || row.pid || row.property_id || row.apn || normalizedAddress(row) || `${row.lat || ""},${row.lon || ""}`);
-}
-
+function propertyKey(row) { return String(row.parcel_id || row.pid || row.property_id || row.apn || normalizedAddress(row) || `${row.lat || ""},${row.lon || ""}`); }
 function isLikelySingleFamily(row) {
   const type = String(row.property_type || row.building_type || row.land_use || row.use_code || row.occupancy || row.property_class || "").toLowerCase();
   const addr = String(row.address || row.property_address || "").toLowerCase();
-  const badType = /(apartment|multi[- ]?family|multifamily|condo|condominium|townhome|townhouse|commercial|retail|office|industrial|mixed use|assisted living|senior living|hotel|motel)/;
-  const unitAddress = /\b(apt|apartment|unit|suite|ste)\b|#\s*[a-z0-9-]+/;
-  if (badType.test(type) || unitAddress.test(addr)) return false;
-  if (Number(row.units || row.unit_count || row.dwelling_units || 1) > 1) return false;
-  return true;
+  if (/(apartment|multi[- ]?family|multifamily|condo|condominium|townhome|townhouse|commercial|retail|office|industrial|mixed use|assisted living|senior living|hotel|motel)/.test(type)) return false;
+  if (/\b(apt|apartment|unit|suite|ste)\b|#\s*[a-z0-9-]+/.test(addr)) return false;
+  return Number(row.units || row.unit_count || row.dwelling_units || 1) <= 1;
 }
-
 function dedupeResidential(rows) {
   const seen = new Set();
   return rows.filter((row) => {
@@ -57,6 +53,9 @@ function dedupeResidential(rows) {
     return true;
   });
 }
+function rankRows(rows) {
+  return dedupeResidential((rows || []).map(scoreRow).filter((r) => r.entered && r._score > 0).sort((a, b) => b._score - a._score));
+}
 
 export async function POST(req) {
   const supabase = supabaseServer();
@@ -65,38 +64,31 @@ export async function POST(req) {
   const { businessName } = await req.json().catch(() => ({}));
   if (!businessName?.trim()) return Response.json({ ok: false, error: "businessName required." }, { status: 400 });
 
-  const { data: top, error: topErr } = await supabase
-    .from("contractor_candidates")
-    .select("prospect_score")
-    .eq("prospect", true)
-    .order("prospect_score", { ascending: false })
-    .limit(1);
+  const { data: top, error: topErr } = await supabase.from("contractor_candidates").select("prospect_score").eq("prospect", true).order("prospect_score", { ascending: false }).limit(1);
   if (topErr) return Response.json({ ok: false, error: topErr.message }, { status: 500 });
 
   const currentTop = top?.[0]?.prospect_score ?? 0;
   const newScore = Math.min(100, Math.max(currentTop + 1, 97));
-
-  const { data: updated, error: updateErr } = await supabase
-    .from("contractor_candidates")
-    .update({ prospect_score: newScore, pitch_status: "prioritized" })
-    .eq("business_name", businessName.trim())
-    .select()
-    .single();
+  const { data: updated, error: updateErr } = await supabase.from("contractor_candidates").update({ prospect_score: newScore, pitch_status: "prioritized" }).eq("business_name", businessName.trim()).select().single();
   if (updateErr) return Response.json({ ok: false, error: updateErr.message }, { status: 500 });
   if (!updated) return Response.json({ ok: false, error: "Contractor prospect not found." }, { status: 404 });
 
   const isApex = /\bapex\b/i.test(updated.business_name || "");
-  const cities = isApex ? ["Apple Valley","Eagan","Burnsville","Lakeville","Rosemount"] : (updated.service_area_cities || []);
-  let leadQuery = supabase.from("batch_leads").select("*").eq("sales_status", "new").limit(1000);
+  const cities = isApex ? ["Apple Valley", "Eagan", "Burnsville", "Lakeville", "Rosemount"] : (updated.service_area_cities || []);
+  let leadQuery = supabase.from("batch_leads").select("*").eq("sales_status", "new").neq("review_status", "rejected").limit(1500);
   if (cities.length) leadQuery = leadQuery.in("city", cities);
   const { data: rows, error: leadsErr } = await leadQuery;
   if (leadsErr) return Response.json({ ok: true, contractor: updated, leads: [], note: "Prioritized, but lead recalibration failed: " + leadsErr.message });
 
-  const leads = dedupeResidential((rows || [])
-    .map(scoreRow)
-    .filter((r) => r.entered && r._score > 0)
-    .sort((a, b) => b._score - a._score))
-    .slice(0, isApex ? 50 : 10);
+  let ranked = rankRows(rows);
+  let territoryFallback = false;
+  if (ranked.length === 0) {
+    territoryFallback = true;
+    const fallback = await supabase.from("batch_leads").select("*").eq("sales_status", "new").neq("review_status", "rejected").not("lat", "is", null).not("lon", "is", null).order("priority_score", { ascending: false }).limit(1000);
+    if (fallback.error) return Response.json({ ok: true, contractor: updated, leads: [], territoryFallback, note: "Prioritized, but fallback lead recovery failed: " + fallback.error.message });
+    ranked = rankRows(fallback.data);
+  }
 
-  return Response.json({ ok: true, contractor: updated, leads, newTopScore: newScore });
+  const leads = ranked.slice(0, isApex ? 50 : 10);
+  return Response.json({ ok: true, contractor: updated, leads, newTopScore: newScore, territoryFallback, requestedCities: cities });
 }
