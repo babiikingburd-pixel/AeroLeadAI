@@ -11,7 +11,10 @@ export async function GET() {
   const avg = decisions.length ? decisions.reduce((a, d) => a + d.confidence, 0) / decisions.length : 0;
   return Response.json({
     success: true,
-    gatekeeper: APEX16_VERSION,
+    system: "V23 GateKeeper Clean Audit",
+    version: "23.0",
+    gatekeeperEngine: `APEX${APEX16_VERSION}`,
+    baseIntelligence: "V22 MAX",
     dataMode,
     table,
     checkedAt: new Date().toISOString(),
