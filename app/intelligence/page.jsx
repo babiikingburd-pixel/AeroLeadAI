@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import BusinessIntelligence from "../../components/BusinessIntelligence";
+import ImmediateIntelligencePanel from "../../components/ImmediateIntelligencePanel";
 import MaintenanceConsole from "../../components/MaintenanceConsole";
 
 const SLATE = "#0d1420", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a", AMBER = "#f5b942";
@@ -35,7 +36,12 @@ export default function IntelligencePage() {
           </button>
         ))}
       </div>
-      {tab === "intelligence" ? <BusinessIntelligence /> : <MaintenanceConsole />}
+      {tab === "intelligence" ? (
+        <>
+          <div style={{ padding: "18px 28px 0" }}><ImmediateIntelligencePanel /></div>
+          <BusinessIntelligence />
+        </>
+      ) : <MaintenanceConsole />}
     </div>
   );
 }
