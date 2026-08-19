@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const FALLBACK_PROSPECTS = [
-  { business_name: "APEX Exteriors LLC", prospect_score: 96, service_area_cities: ["Plymouth","Maple Grove","Brooklyn Park","Champlin","Golden Valley"] },
+  { business_name: "APEX Exteriors LLC", prospect_score: 96, service_area_cities: ["Apple Valley","Eagan","Burnsville","Lakeville","Rosemount"] },
   { business_name: "Incline Exteriors", prospect_score: 92, service_area_cities: ["Excelsior","Deephaven","Minnetonka","Chanhassen","Chaska","Edina","Eden Prairie","Wayzata"] },
   { business_name: "Grussing Roofing & Exteriors", prospect_score: 91, service_area_cities: ["Eden Prairie","Edina","St Louis Park","Chaska","Chanhassen","Maple Grove","Bloomington"] },
   { business_name: "Storm ReNu", prospect_score: 90, service_area_cities: ["Bloomington","Richfield","Edina","Eagan","Burnsville"] },
@@ -39,6 +39,46 @@ function scoreRow(row) {
     gutterIndicator: row.damage_notes?.gutterIndicator === true,
   });
   return { ...row, _score: result.priorityScore, evidenceScore: result.evidenceScore, confidenceScore: result.confidenceScore, entered: result.entered };
+}
+
+function normalizedAddress(row) {
+  return String(row.address || row.property_address || "")
+    .toLowerCase()
+    .replace(/\b(apt|apartment|unit|suite|ste|#)\s*[a-z0-9-]+\b/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+}
+
+function propertyKey(row) {
+  return String(row.parcel_id || row.pid || row.property_id || row.apn || normalizedAddress(row) || `${row.lat || ""},${row.lon || ""}`);
+}
+
+function isLikelySingleFamily(row) {
+  const type = String(row.property_type || row.building_type || row.land_use || row.use_code || row.occupancy || row.property_class || "").toLowerCase();
+  const addr = String(row.address || row.property_address || "").toLowerCase();
+  const badType = /(apartment|multi[- ]?family|multifamily|condo|condominium|townhome|townhouse|commercial|retail|office|industrial|mixed use|assisted living|senior living|hotel|motel)/;
+  const unitAddress = /\b(apt|apartment|unit|suite|ste)\b|#\s*[a-z0-9-]+/;
+  if (badType.test(type) || unitAddress.test(addr)) return false;
+  if (Number(row.units || row.unit_count || row.dwelling_units || 1) > 1) return false;
+  return true;
+}
+
+function dedupeResidential(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    if (!isLikelySingleFamily(row)) continue;
+    const key = propertyKey(row);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+function contractorCities(selected) {
+  const isApex = /\bapex\b/i.test(selected?.business_name || "");
+  return isApex ? ["Apple Valley","Eagan","Burnsville","Lakeville","Rosemount"] : (selected?.service_area_cities || []);
 }
 
 async function waitForEagleView(requestId, maxWaitMs = 12000) {
@@ -99,13 +139,17 @@ export async function GET(request) {
     const selected = name ? list[0] : null;
     let leads = [];
     if (selected) {
-      const cities = selected.service_area_cities || [];
-      let leadQuery = supabase.from("batch_leads").select("*").eq("sales_status", "new").limit(500);
+      const cities = contractorCities(selected);
+      let leadQuery = supabase.from("batch_leads").select("*").eq("sales_status", "new").limit(1000);
       if (cities.length) leadQuery = leadQuery.in("city", cities);
-      const { data } = await leadQuery;
-      const ranked = (data || []).map(scoreRow).filter((r) => r.entered && r._score > 0).sort((a, b) => b._score - a._score).slice(0, 10);
-      // Contractor screens are visual-first: do the EagleView lookup before returning the lead set.
-      leads = await enrichTopLeads(ranked);
+      const { data, error: leadError } = await leadQuery;
+      if (leadError) throw leadError;
+      const ranked = dedupeResidential((data || []).map(scoreRow).filter((r) => r.entered && r._score > 0).sort((a, b) => b._score - a._score));
+      const isApex = /\bapex\b/i.test(selected.business_name || "");
+      const visible = ranked.slice(0, isApex ? 50 : 10);
+      const eagerCount = Math.min(visible.length, isApex ? 12 : visible.length);
+      const eager = await enrichTopLeads(visible.slice(0, eagerCount));
+      leads = [...eager, ...visible.slice(eagerCount).map((lead) => ({ ...lead, images: [], image_status: "QUEUED" }))];
     }
     return Response.json({ ok: true, prospects: list.length ? list : FALLBACK_PROSPECTS, contractor: selected, leads, imagery_mode: selected ? "EAGER_EAGLEVIEW" : "IDLE" });
   } catch (e) {
