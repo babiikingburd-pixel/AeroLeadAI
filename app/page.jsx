@@ -1,8 +1,8 @@
-import V22MaxConsole from "../components/v22max/V22MaxConsole";
+import UnifiedCommand from "../components/v22max/UnifiedCommand";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default function Page() {
-  return <V22MaxConsole limit={500} />;
+  return <UnifiedCommand limit={500} />;
 }
