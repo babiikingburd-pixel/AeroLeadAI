@@ -190,6 +190,7 @@ assert.ok(securityFiles.top500Network.includes("internalAccessHeaders(req)"), "H
 assert.ok(securityFiles.top500Network.includes("headers:{...accessHeaders"), "Top 500 evidence calls must carry their internal authorization");
 assert.ok(securityFiles.evidenceCycle.includes("internalAccessHeaders(req)"), "manual evidence swarms must forward owner authorization to internal workers");
 assert.ok(securityFiles.evidenceCycle.includes("headers:{...accessHeaders"), "manual imagery and weather calls must carry owner authorization");
+assert.ok(securityFiles.evidenceCycle.includes("MAX_LIMIT = 16"), "owner-triggered evidence sprints must process sixteen bounded properties");
 assert.ok(securityFiles.top500Network.includes("imagery: 30 * 86400"), "imagery refreshes must follow the 30-day cache horizon");
 assert.ok(securityFiles.imageryBackfillMigration.includes("priority = 2000"), "initial Top 500 imagery must outrank secondary crawler lanes");
 assert.ok(securityFiles.imageryClaimMigration.includes("task.lane_name = p_lane_name"), "accelerated shards must claim only their requested evidence lane");
@@ -214,8 +215,8 @@ const vercel = JSON.parse(read("vercel.json"));
 const leaderboardCron = vercel.crons?.find((entry) => entry.path === "/api/cron/apex-leaderboard");
 assert.equal(leaderboardCron?.schedule, "0 0 * * *", "Lite leaderboard must remain Hobby-safe at once per day");
 const imageryBursts = vercel.crons?.filter((entry) => entry.path.startsWith("/api/cron/top500-burst/")) || [];
-assert.equal(imageryBursts.length, 24, "Hobby-safe imagery backfill must have 24 bounded daily shards");
-assert.equal(new Set(imageryBursts.map((entry) => entry.schedule)).size, 24, "imagery shards must be distributed across distinct daily times");
+assert.equal(imageryBursts.length, 64, "Hobby-safe imagery backfill must have 64 bounded daily shards");
+assert.equal(new Set(imageryBursts.map((entry) => entry.schedule)).size, 64, "imagery shards must be distributed across distinct daily times");
 assert.ok(vercel.crons.every((entry) => /^\d{1,2} \d{1,2} \* \* \*$/.test(entry.schedule)), "every Hobby cron must run no more than daily");
 
 console.log("AUDIT PASSED: AeroLeadAI Lite Evidence Twin, private access, and compact imagery invariants");
