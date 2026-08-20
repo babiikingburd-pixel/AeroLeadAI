@@ -1,134 +1,93 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
-
+import { enrichLeadValue } from "../../../../lib/twincities/propertyValue";
+export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MAX_LIMIT = 12;
-const DEFAULT_LIMIT = 8;
+const MAX_LIMIT = 6;
+const DEFAULT_LIMIT = 4;
+const TOP_POOL = 900;
+const BAND_PLAN = [
+  { start: 1, end: 25, slots: 2 },
+  { start: 26, end: 100, slots: 1 },
+  { start: 101, end: 500, slots: 1 },
+  { start: 501, end: 900, slots: 1 },
+];
 
-function auth(req) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return true;
-  return req.headers.get("authorization") === `Bearer ${secret}` ||
-    new URL(req.url).searchParams.get("secret") === secret;
+function auth(req){
+  const secret=process.env.CRON_SECRET, origin=req.headers.get("origin")||"", host=req.headers.get("host")||"";
+  if(host&&origin&&origin.includes(host)) return true;
+  if(!secret) return true;
+  return req.headers.get("authorization")===`Bearer ${secret}`||new URL(req.url).searchParams.get("secret")===secret;
+}
+async function fetchJson(url,options={},timeout=9000){
+  try{const res=await fetch(url,{...options,signal:AbortSignal.timeout(timeout)});const data=await res.json().catch(()=>({}));return{ok:res.ok,status:res.status,data};}
+  catch(e){return{ok:false,status:0,data:{error:e.message}};}
+}
+function looksLikeUnitAddress(addr=""){return /\b(apt|apartment|unit|suite|ste|#)\s*[a-z0-9-]+\b/i.test(String(addr))}
+function residentialEnough(r){
+  const cls=String(r.property_class||"").toLowerCase(),addr=String(r.address||"").toLowerCase();
+  const blocked=["apartment","apartments","multifamily","multi-family","multi family","commercial","industrial","office","retail","hotel","school","church","condo building","duplex","triplex","fourplex","townhome complex"];
+  return !blocked.some(x=>cls.includes(x)||addr.includes(x))&&!looksLikeUnitAddress(addr)&&!!r.address&&r.lat!=null&&r.lon!=null;
+}
+function lastTouched(r){return Math.max(0,...[r.evidence_cycle_at,r.top500_last_investigated_at,r.weather_checked_at,r.permit_checked_at,r.image_fetched_at,r.assessor_checked_at].map(v=>v?Date.parse(v):0).filter(Number.isFinite));}
+function selectSwarm(rows,limit){
+  const ranked=rows.filter(residentialEnough).map((r,i)=>({...r,__rank:i+1,__lastTouched:lastTouched(r)})),picked=[],used=new Set();
+  const add=r=>{if(r&&picked.length<limit&&!used.has(String(r.id))){used.add(String(r.id));picked.push(r)}};
+  if(ranked[0]&&Number(ranked[0].confidence_score||0)<85)add(ranked[0]);
+  for(const band of BAND_PLAN){let slots=Math.min(band.slots,limit-picked.length);for(const r of ranked.filter(x=>x.__rank>=band.start&&x.__rank<=band.end&&!used.has(String(x.id))).sort((a,b)=>a.__lastTouched-b.__lastTouched||a.__rank-b.__rank)){if(slots--<=0||picked.length>=limit)break;add(r)}}
+  for(const r of ranked.filter(x=>!used.has(String(x.id))).sort((a,b)=>a.__lastTouched-b.__lastTouched||a.__rank-b.__rank))add(r);
+  return picked.slice(0,limit);
 }
 
-async function fetchJson(url, options = {}, timeout = 12000) {
-  try {
-    const res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeout) });
-    const data = await res.json().catch(() => ({}));
-    return { ok: res.ok, status: res.status, data };
-  } catch (e) {
-    return { ok: false, status: 0, data: { error: e.message } };
-  }
+async function processRow(row,origin,supabase){
+  const address=`${row.address}, ${row.city||""}, MN`,started=new Date().toISOString();
+  const [permit,weather,imagery,value]=await Promise.all([
+    fetchJson(`${origin}/api/permit-lookup?address=${encodeURIComponent(address)}`,{},7000),
+    fetchJson(`${origin}/api/weather-agent`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({lat:row.lat,lon:row.lon,address})},7000),
+    fetchJson(`${origin}/api/imagery-agent`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:true,force:false})},9000),
+    enrichLeadValue({county:row.county,lat:row.lat,lon:row.lon,address:row.address},supabase).catch(()=>null),
+  ]);
+  const records=Array.isArray(permit.data?.records)?permit.data.records:[];
+  const roofPermits=records.filter(p=>p.roof_related===true||/roof|shingle|reroof|re-roof|roofing/i.test(`${p.permit_type||""} ${p.description||""}`));
+  const tenYearsAgo=new Date();tenYearsAgo.setFullYear(tenYearsAgo.getFullYear()-10);
+  const recentRoof=roofPermits.filter(p=>p.issue_date&&new Date(p.issue_date)>=tenYearsAgo);
+  const patch={
+    permit_evidence_status:permit.ok?(records.length?"verified":"none_found"):(row.permit_evidence_status||"unknown"),
+    permit_checked_at:permit.ok?started:(row.permit_checked_at||null),
+    permit_notes:JSON.stringify({checked_at:started,total_permits:records.length,roof_permits:roofPermits.length,recent_roof_permits:recentRoof.length,records_detail:records,swarm_rank:row.__rank}),
+    permit_history_count:records.length,permit_history:records,
+    permit_within_10y:permit.ok?recentRoof.length>0:(row.permit_within_10y??null),
+    image_evidence_status:imagery.ok?"fetched":(row.image_evidence_status||"unknown"),
+    image_fetched_at:imagery.ok?started:(row.image_fetched_at||null),
+    weather_evidence_status:weather.ok?"verified":(row.weather_evidence_status||"unknown"),
+    storm_evidence_status:weather.ok?"verified":(row.storm_evidence_status||"unknown"),
+    weather_checked_at:weather.ok?started:(row.weather_checked_at||null),storm_checked_at:weather.ok?started:(row.storm_checked_at||null),
+    weather_evidence:weather.ok?weather.data:(row.weather_evidence||null),
+    assessor_checked_at:value?started:(row.assessor_checked_at||null),
+    value_evidence_status:value?.assessedValue?"verified":(row.value_evidence_status||"unknown"),
+    evidence_cycle_at:started,evidence_cycle_version:"AERO16-ROOFING-RESTORE",
+    top500_last_investigated_at:row.__rank<=500?started:(row.top500_last_investigated_at||null),
+  };
+  if(value?.assessedValue)patch.assessed_value=value.assessedValue;
+  if(value?.yearBuilt)patch.year_built=value.yearBuilt;
+  if(value?.source)patch.value_source=value.source;
+  if(weather.ok){patch.freeze_thaw_signal=!!weather.data?.freezeThawSignal;patch.current_snow_signal=Number(weather.data?.snowPeriods||0)>0;patch.weather_summary=weather.data?.summary||null;}
+  const {error}=await supabase.from("batch_leads").update(patch).eq("id",row.id);
+  if(error)return{id:row.id,rank:row.__rank,address:row.address,persisted:false,error:error.message};
+  return{id:row.id,rank:row.__rank,address:row.address,persisted:true,confidenceBefore:row.confidence_score,permitsFound:records.length,roofPermits:roofPermits.length,recentRoofPermits:recentRoof.length,yearBuilt:value?.yearBuilt??row.year_built??null,assessedValue:value?.assessedValue??row.assessed_value??null,weatherChecked:weather.ok,imageryFetched:imagery.ok};
 }
 
-export async function POST(req) {
-  if (!auth(req)) return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  const supabase = supabaseServer();
-  if (!supabase) return Response.json({ ok: false, error: "Supabase not configured." }, { status: 500 });
-
-  let body = {};
-  try { body = await req.json(); } catch {}
-  const limit = Math.min(Number(body.limit) || DEFAULT_LIMIT, MAX_LIMIT);
-  const origin = new URL(req.url).origin;
-
-  const { data: rows, error } = await supabase
-    .from("batch_leads")
-    .select("*")
-    .eq("sales_status", "new")
-    .neq("review_status", "rejected")
-    .gt("priority_score", 0)
-    .not("lat", "is", null)
-    .not("lon", "is", null)
-    .order("priority_score", { ascending: false })
-    .order("confidence_score", { ascending: false, nullsFirst: false })
-    .limit(limit);
-
-  if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
-  if (!rows?.length) return Response.json({ ok: true, processed: 0, note: "No scored candidates remain in the active pipeline." });
-
-  const results = [];
-  for (const row of rows) {
-    const address = `${row.address}, ${row.city || ""}, MN`;
-    const started = new Date().toISOString();
-
-    // These are intentionally independent so a slow provider does not block
-    // unrelated evidence. The existing routes persist their own evidence.
-    const [permit, weather, imagery] = await Promise.all([
-      fetchJson(`${origin}/api/permit-lookup?address=${encodeURIComponent(address)}`, {}, 10000),
-      fetchJson(`${origin}/api/weather-agent`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ lat: row.lat, lon: row.lon }),
-      }, 10000),
-      fetchJson(`${origin}/api/imagery-agent`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ lat: row.lat, lon: row.lon, address: row.address, leadId: row.id, lite: true, force: true }),
-      }, 15000),
-    ]);
-
-    const records = permit.data?.records || [];
-    const roofPermits = records.filter(p =>
-      p.roof_related === true ||
-      /roof|shingle|reroof|re-roof|roofing/i.test(`${p.permit_type || ""} ${p.description || ""}`)
-    );
-
-    const patch = {
-      permit_evidence_status: permit.ok ? (records.length ? "verified" : "none_found") : "unknown",
-      permitChecked: permit.ok,
-      permit_checked_at: permit.ok ? started : null,
-      permit_notes: JSON.stringify({
-        checked_at: started,
-        total_permits: records.length,
-        roof_permits: roofPermits.length,
-        source: permit.data?.inDirectory ? "directory" : "external_or_lookup",
-      }),
-      permit_history_count: records.length,
-      permit_history: records,
-      image_evidence_status: imagery.ok ? "fetched" : "failed",
-      image_fetched_at: imagery.ok ? started : null,
-      weather_evidence_status: weather.ok ? "verified" : "unknown",
-      weather_checked_at: weather.ok ? started : null,
-      weather_evidence: weather.ok ? weather.data : null,
-      evidence_cycle_at: started,
-      evidence_cycle_version: "APEX10.2",
-    };
-
-    if (weather.ok) {
-      patch.freeze_thaw_signal = !!weather.data?.freezeThawSignal;
-      patch.current_snow_signal = Number(weather.data?.snowPeriods || 0) > 0;
-      patch.weather_summary = weather.data?.summary || null;
-    }
-
-    await supabase.from("batch_leads").update(patch).eq("id", row.id);
-
-    // Ask the existing validation worker/evidence machinery to rescore this
-    // property after the evidence has been persisted.
-    const rescore = await fetchJson(`${origin}/api/twincities/validation-worker`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(process.env.CRON_SECRET ? { authorization: `Bearer ${process.env.CRON_SECRET}` } : {}) },
-      body: JSON.stringify({ limit: 1, workerId: `evidence-cycle-${row.id}` }),
-    }, 20000);
-
-    results.push({
-      id: row.id,
-      address: row.address,
-      scoreBefore: row.priority_score,
-      permitsFound: records.length,
-      roofPermits: roofPermits.length,
-      weatherChecked: weather.ok,
-      imageryFetched: imagery.ok,
-      rescoreTriggered: rescore.ok,
-    });
-  }
-
-  return Response.json({
-    ok: true,
-    version: "APEX10.2",
-    processed: results.length,
-    order: "priority_desc_then_confidence_desc",
-    results,
-    note: "Evidence cycle processes highest-ranked properties first and persists permit history, weather evidence, imagery retrieval, then triggers rescoring.",
-  });
+export async function POST(req){
+  if(!auth(req))return Response.json({ok:false,error:"Unauthorized"},{status:401});
+  const supabase=supabaseServer();if(!supabase)return Response.json({ok:false,error:"Supabase not configured."},{status:500});
+  let body={};try{body=await req.json()}catch{}
+  const limit=Math.min(Math.max(1,Number(body.limit)||DEFAULT_LIMIT),MAX_LIMIT),origin=new URL(req.url).origin;
+  const {data:ranked,error}=await supabase.from("batch_leads").select("*").eq("sales_status","new").neq("review_status","rejected").gt("priority_score",0).not("lat","is",null).not("lon","is",null).order("priority_score",{ascending:false}).order("confidence_score",{ascending:false,nullsFirst:false}).limit(TOP_POOL);
+  if(error)return Response.json({ok:false,error:error.message},{status:500});
+  if(!ranked?.length)return Response.json({ok:true,processed:0,persisted:0,note:"No scored candidates remain."});
+  const rows=selectSwarm(ranked,limit);
+  if(!rows.length)return Response.json({ok:true,processed:0,persisted:0,note:"No eligible residential roofing candidates remain in this pool."});
+  const results=await Promise.all(rows.map(r=>processRow(r,origin,supabase)));
+  const persisted=results.filter(r=>r.persisted).length;
+  return Response.json({ok:true,version:"AERO16-ROOFING-RESTORE",processed:results.length,persisted,poolSize:ranked.length,eligiblePool:ranked.filter(residentialEnough).length,results,note:"Permit, assessor/year-built, weather and imagery evidence persisted together."});
 }

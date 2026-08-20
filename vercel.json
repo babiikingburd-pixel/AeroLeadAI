@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/twincities/network-pulse",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/heartbeat",
       "schedule": "0 9 * * *"
     },
@@ -23,6 +27,10 @@
     {
       "path": "/api/twincities/autonomous-cycle",
       "schedule": "30 1 * * *"
+    },
+    {
+      "path": "/api/eagleview/edina-cycle",
+      "schedule": "15 11 * * *"
     },
     {
       "path": "/api/cron/apex-leaderboard",

@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 const VALID_REGIONS = ["East", "Midwest", "South", "West"];
 

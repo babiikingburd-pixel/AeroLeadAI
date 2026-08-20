@@ -1,6 +1,7 @@
 import { Boardroom } from "../../../../../../lib/executive/boardroom";
 import { AeroLeadAIAdapter } from "../../../../../../lib/executive/adapter";
 import { createExecutiveAIClient, activeProvider } from "../../../../../../lib/executive/aiClient";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 

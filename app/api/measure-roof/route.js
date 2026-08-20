@@ -1,5 +1,6 @@
 import { callVisionModel, activeProvider } from "../../../lib/aiClient";
 import { isValidImagePayload } from "../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 // AI-estimated roof measurements from overhead imagery. This is a rough
 // order-of-magnitude estimate for the inspection report, not a substitute

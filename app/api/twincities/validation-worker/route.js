@@ -1,6 +1,7 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { applyEvidenceAndRescore } from "../../../../lib/twincities/evidenceEvents";
 import { enrichLeadValue } from "../../../../lib/twincities/propertyValue";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 const DEFAULT_LIMIT = 12;

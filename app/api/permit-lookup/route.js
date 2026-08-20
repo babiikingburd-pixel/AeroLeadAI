@@ -9,6 +9,8 @@
 // here permanently, so the second time that address comes up it's an instant,
 // free hit instead of a repeat manual entry.
 
+export const dynamic = "force-dynamic";
+
 function supabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const key =

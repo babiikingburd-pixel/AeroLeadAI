@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
 import { requireApiKey, corsHeaders } from "@/lib/auth";
+export const dynamic = "force-dynamic";
 
 // APEX 20.4 scoring endpoint. Auth-gated per 04-SECURITY-NOTES.md:
 // "Add an API key/auth header before deploying anywhere reachable

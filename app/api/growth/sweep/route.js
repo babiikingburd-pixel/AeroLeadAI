@@ -1,4 +1,5 @@
 import { runMonitoringSweep } from "../../../../lib/growth/recruiter";
+export const dynamic = "force-dynamic";
 
 // Call on a schedule (e.g. Vercel Cron) to suspend contractors whose
 // insurance has lapsed or whose job outcomes have cratered.

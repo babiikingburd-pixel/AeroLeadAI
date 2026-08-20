@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 // Backs the National leaderboard tab. Reads the `national_priority_rankings`
 // Supabase view directly — this view is expected to already be pre-ranked

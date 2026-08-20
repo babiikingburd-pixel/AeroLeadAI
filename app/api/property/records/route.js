@@ -1,4 +1,5 @@
 import { getOrCreateProperty, getPropertyTimeline, appendHistory } from "../../../../lib/property/propertyRecord";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const id = new URL(req.url).searchParams.get("id");

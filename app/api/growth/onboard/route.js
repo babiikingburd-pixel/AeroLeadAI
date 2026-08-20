@@ -1,4 +1,5 @@
 import { onboardCandidate } from "../../../../lib/growth/recruiter";
+export const dynamic = "force-dynamic";
 
 export async function POST(req) {
   try {

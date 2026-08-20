@@ -2,6 +2,7 @@ import { supabaseServer } from "../../../../lib/supabaseServer";
 import { SUPPORTED_COUNTIES } from "../../../../lib/twincities/propertyValue";
 import { calculatePriority } from "../../../../lib/twincities/priorityEngine";
 import { getContractor } from "../../../../lib/twincities/contractors";
+export const dynamic = "force-dynamic";
 
 // Generalized top-N contractor report endpoint — replaces the one-off
 // /api/apex10 (kept as a redirect for any link already sent out, see that

@@ -1,5 +1,6 @@
 import { discoverByRadius, discoverByPolygon, geocodePlace } from "../../../lib/discoveryCore";
 import { cacheGet, cacheSet } from "../../../lib/serverCache";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 45;
 

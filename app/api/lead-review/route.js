@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 // POST /api/lead-review
 // body: { id: string, status: 'approved'|'partial'|'rejected'|'needs_images', notes?: string, adjustment?: number }

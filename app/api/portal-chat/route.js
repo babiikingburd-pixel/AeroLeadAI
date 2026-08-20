@@ -1,5 +1,6 @@
 import { callTextModel, activeProvider } from "../../../lib/aiClient";
 import { isValidAddress } from "../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 // Customer Portal AI chat — grounded in that specific job's real data
 // (address, damage findings, status, estimate) so it can't invent details

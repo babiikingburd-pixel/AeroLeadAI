@@ -4,6 +4,7 @@
 // invisibly in the background.
 
 import { supabaseGet } from "../../../lib/supabaseRest";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const [lastCycle, accuracy, recentRuns, recentInsights] = await Promise.all([

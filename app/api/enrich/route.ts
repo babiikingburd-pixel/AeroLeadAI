@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
 import { requireApiKey, corsHeaders } from "@/lib/auth";
+export const dynamic = "force-dynamic";
 
 // Free-evidence enrichment (NWS storm data + permit validation).
 // Auth-gated for the same reason as score-property.

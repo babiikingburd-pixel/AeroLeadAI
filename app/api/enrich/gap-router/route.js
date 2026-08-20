@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 // EVIDENCE GAP ROUTER
 //

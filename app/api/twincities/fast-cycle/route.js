@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { TC_COUNTIES, FAST_SCORE_FIELDS, scoreRow, validationPriority, buildValidationChecks } from "../../../../lib/twincities/fastCycle";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 
@@ -54,6 +55,38 @@ export async function POST(req) {
   const scanLimit = Math.min(Math.max(Number(body.scanLimit) || 1000, 100), 2000);
   const challengerLimit = Math.min(Math.max(Number(body.challengerLimit) || 750, 250), 1500);
 
+  // Active priority window? (see supabase/migrations for priority_windows —
+  // self-expiring, no manual deactivation needed). If one exists, split this
+  // scan batch: `weight` fraction targets properties in the window's cities,
+  // the rest still runs the normal full-population rotation below, so the
+  // other five counties keep moving instead of fully starving.
+  let windowRows = [];
+  let remainingLimit = scanLimit;
+  const { data: activeWindows } = await supabase
+    .from("priority_windows")
+    .select("label, target_cities, weight, expires_at")
+    .gt("expires_at", new Date().toISOString())
+    .order("activated_at", { ascending: false })
+    .limit(1);
+  const activeWindow = activeWindows?.[0] || null;
+
+  if (activeWindow?.target_cities?.length) {
+    const windowLimit = Math.max(1, Math.round(scanLimit * Number(activeWindow.weight)));
+    const { data: wRows, error: wErr } = await supabase
+      .from("batch_leads")
+      .select(FAST_SCORE_FIELDS)
+      .in("county", TC_COUNTIES)
+      .in("city", activeWindow.target_cities)
+      .eq("sales_status", "new")
+      .neq("review_status", "rejected")
+      .order("id", { ascending: true })
+      .limit(windowLimit);
+    if (!wErr && wRows?.length) {
+      windowRows = wRows;
+      remainingLimit = Math.max(0, scanLimit - wRows.length);
+    }
+  }
+
   // APEX 9.6 scanned the first N rows repeatedly. That meant the remaining
   // Twin Cities population could remain permanently untouched. 9.7 rotates
   // through the full eligible population deterministically.
@@ -66,21 +99,25 @@ export async function POST(req) {
   if (countError) return Response.json({ ok: false, error: countError.message }, { status: 500 });
 
   const total = Number(eligibleCount || 0);
-  const pageCount = Math.max(1, Math.ceil(total / scanLimit));
+  const pageCount = Math.max(1, Math.ceil(total / Math.max(1, remainingLimit)));
   const requestedPage = body.page != null ? Number(body.page) : Math.floor(Date.now() / 300000) % pageCount;
   const page = ((requestedPage % pageCount) + pageCount) % pageCount;
-  const from = page * scanLimit;
-  const to = Math.min(total - 1, from + scanLimit - 1);
+  const from = page * remainingLimit;
+  const to = Math.min(total - 1, from + remainingLimit - 1);
 
-  const { data: rows, error } = await supabase
-    .from("batch_leads")
-    .select(FAST_SCORE_FIELDS)
-    .in("county", TC_COUNTIES)
-    .eq("sales_status", "new")
-    .neq("review_status", "rejected")
-    .order("id", { ascending: true })
-    .range(from, to);
-  if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
+  let rows = windowRows;
+  if (remainingLimit > 0) {
+    const { data: restRows, error } = await supabase
+      .from("batch_leads")
+      .select(FAST_SCORE_FIELDS)
+      .in("county", TC_COUNTIES)
+      .eq("sales_status", "new")
+      .neq("review_status", "rejected")
+      .order("id", { ascending: true })
+      .range(from, to);
+    if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
+    rows = [...windowRows, ...(restRows || [])];
+  }
 
   const scored = (rows || []).map(scoreRow).filter(r => r.entered);
   scored.sort((a, b) => b.priorityScore - a.priorityScore || b.confidenceScore - a.confidenceScore);

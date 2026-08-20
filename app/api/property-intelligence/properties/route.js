@@ -1,4 +1,5 @@
 import { findOrCreateProperty, listProperties } from "../../../../lib/properties";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);

@@ -1,4 +1,5 @@
 import { createOrganization, listOrganizations, getPortfolioReport, addOrgUser, bulkImportPortfolio } from "../../../../lib/enterprise/organizations";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const orgId = new URL(req.url).searchParams.get("report");

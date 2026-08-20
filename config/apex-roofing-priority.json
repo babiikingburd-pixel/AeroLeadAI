@@ -1,0 +1,33 @@
+{
+  "version": "APEX15.0",
+  "priority_rank": 1,
+  "display_name": "Apex Roofing",
+  "legal_name": "Apex Roofing & Siding LLC",
+  "identity_lock": [
+    "Apex Roofing",
+    "Apex Roofing & Siding LLC"
+  ],
+  "excluded_identity_terms": [
+    "Apex Exteriors",
+    "APEX Exteriors LLC"
+  ],
+  "website": "https://www.apexroofingandsiding.net/",
+  "hq_city": "Apple Valley",
+  "hq_county": "dakota",
+  "service_area": [
+    "Apple Valley",
+    "Lakeville",
+    "Farmington",
+    "Rosemount",
+    "New Elko",
+    "Credit River",
+    "Burnsville",
+    "Prior Lake",
+    "Eagan",
+    "Bloomington",
+    "Richfield"
+  ],
+  "contractor_type": "roofing",
+  "source_verified": "2026-08-13",
+  "priority_policy": "Always rank this contractor campaign first in contractor-opportunity routing. Property opportunity rank remains evidence-based and is never fabricated."
+}

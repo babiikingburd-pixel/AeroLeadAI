@@ -1,4 +1,5 @@
 import { findOrCreateNeighborhood, computeInternalStats, upsertExternalStats, getNeighborhoodStats } from "../../../../lib/neighborhoods";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);

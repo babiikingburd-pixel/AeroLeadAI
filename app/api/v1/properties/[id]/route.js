@@ -1,5 +1,6 @@
 import { verifyApiKey } from "../../../../../lib/platformApi";
 import { supabaseServer } from "../../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 /**
  * GET /api/v1/properties/:id

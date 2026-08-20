@@ -20,14 +20,18 @@ const MODULES = [
   { href: "/enterprise", label: "Enterprise" },
   { href: "/executive", label: "Executive" },
   { href: "/apex", label: "APEX Release Train" },
+  { href: "/cockpit", label: "Glass Cockpit" },
 ];
 
 export default function TacticalShell({ children }) {
   const pathname = usePathname();
 
   // Customer Portal is homeowner-facing — no internal nav chrome there,
-  // same exclusion ConditionalTopNav used to apply.
-  if (pathname?.startsWith("/portal/")) return children;
+  // same exclusion ConditionalTopNav used to apply. The Glass Cockpit is
+  // its own full-viewport immersive shell (own topbar, flight-deck rail,
+  // bottom bar) — wrapping it in the standard admin sidebar+topbar doubled
+  // up the chrome and broke the "glass spaceship" layout it's meant to be.
+  if (pathname?.startsWith("/portal/") || pathname === "/cockpit") return children;
 
   return <ShellChrome pathname={pathname}>{children}</ShellChrome>;
 }

@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 // POST /api/enrich/promote-queue { limit?: number, cities?: string[], minScore?: number, targetSize?: number }
 //

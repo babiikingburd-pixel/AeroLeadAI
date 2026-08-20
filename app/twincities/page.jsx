@@ -1,330 +1,56 @@
 "use client";
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HUD } from "../../lib/hudTheme";
 
-const TIERS = [
-  { key: "candidates", label: "Top 500 Candidates", cap: 500 },
-  { key: "review", label: "Top 100 Human Review", cap: 100 },
-  { key: "contractor", label: "Top 20 Contractor Package", cap: 20 },
-];
+const TIERS=[{key:"review",label:"Top 100 Human Review",cap:100},{key:"candidates",label:"Top 500 Candidates",cap:500},{key:"contractor",label:"Top 20 Contractor Package",cap:20}];
+const COUNTY_LABEL={hennepin:"Hennepin",ramsey:"Ramsey",dakota:"Dakota",scott:"Scott",carver:"Carver",anoka:"Anoka"};
+const REVIEW_COLOR={pending:HUD.amber,approved:HUD.green,partial:HUD.cyan,rejected:HUD.red,needs_images:HUD.muted,contractor_sent:HUD.cyan};
 
-const COUNTY_LABEL = { hennepin: "Hennepin", ramsey: "Ramsey", dakota: "Dakota", scott: "Scott", carver: "Carver", anoka: "Anoka" };
+export default function TwinCitiesPriorityPage(){
+  const [tier,setTier]=useState("review"),[leads,setLeads]=useState([]),[loading,setLoading]=useState(false),[error,setError]=useState(null),[meta,setMeta]=useState(null),[expanded,setExpanded]=useState(null),[imageLead,setImageLead]=useState(null),[crawling,setCrawling]=useState(false),[crawlStatus,setCrawlStatus]=useState(null),[query,setQuery]=useState(""),[confidenceFilter,setConfidenceFilter]=useState("all"),[autoRefresh,setAutoRefresh]=useState(true);
+  const firstAutoSwarm=useRef(false);
 
-const REVIEW_COLOR = { pending: HUD.amber, approved: HUD.green, partial: HUD.cyan, rejected: HUD.red, needs_images: HUD.muted, contractor_sent: HUD.cyan };
+  const load=useCallback(async(t)=>{setLoading(true);setError(null);try{const res=await fetch(`/api/top-leads?tier=${t}&_=${Date.now()}`,{cache:"no-store"});const data=await res.json();if(!data.ok)throw new Error(data.error||"Unable to load leads");setLeads(data.leads||[]);setMeta({scanned:data.scanned,entered:data.entered,cap:data.cap,top100Count:data.top100Count,top500Count:data.top500Count,singleFamilyPrioritized:data.singleFamilyPrioritized});}catch(e){setError(e.message)}finally{setLoading(false)}},[]);
+  useEffect(()=>{load(tier)},[tier,load]);
+  useEffect(()=>{if(!autoRefresh)return;const id=setInterval(()=>load(tier),60000);return()=>clearInterval(id)},[autoRefresh,tier,load]);
 
-export default function TwinCitiesPriorityPage() {
-  const [tier, setTier] = useState("candidates");
-  const [leads, setLeads] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [meta, setMeta] = useState(null);
-  const [expanded, setExpanded] = useState(null);
-  const [selected, setSelected] = useState({});
-  const [contractorName, setContractorName] = useState("");
-  const [exportStatus, setExportStatus] = useState(null);
-  const [crawling, setCrawling] = useState(false);
-  const [crawlStatus, setCrawlStatus] = useState(null);
-  const [showingCache, setShowingCache] = useState(false);
-  const [cacheTimestamp, setCacheTimestamp] = useState(null);
+  async function runEvidenceCycle(auto=false){if(crawling)return;setCrawling(true);setCrawlStatus({ok:true,message:auto?"Auto-swarm is strengthening the weakest ranked homes…":"Searching permits, year built, assessor data, storm/weather and imagery…"});try{const res=await fetch("/api/twincities/evidence-cycle",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({limit:auto?4:6})});const data=await res.json();setCrawlStatus({ok:!!data.ok,message:data.ok?`Evidence swarm processed ${data.processed}; ${data.persisted??data.processed} persisted. Permit + year-built coverage refreshed.`:(data.error||"Evidence cycle failed")});if(data.ok)await load(tier)}catch(e){setCrawlStatus({ok:false,message:e.message})}finally{setCrawling(false)}}
+  useEffect(()=>{if(firstAutoSwarm.current||loading||!leads.length)return;const weak=leads.filter(l=>Number(l.confidenceScore||0)<50||!l.yearBuilt||!l.permit?.checkedAt).length;if(tier==="review"&&weak>=Math.min(10,Math.ceil(leads.length*.35))){firstAutoSwarm.current=true;runEvidenceCycle(true)}},[loading,leads,tier]);
 
-  const cacheKey = (t) => `twincities_cache_${t}`;
+  function chooseTier(next){if(next===tier)load(next);else setTier(next);setExpanded(null)}
+  async function setReviewStatus(id,status){setLeads(cur=>cur.map(l=>l.id===id?{...l,reviewStatus:status}:l));try{const r=await fetch("/api/lead-review",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id,status})});if(!r.ok)throw new Error("Review update failed")}catch(e){setCrawlStatus({ok:false,message:e.message})}}
 
-  // Load whatever's cached for this tier immediately (synchronous, instant,
-  // works with zero network) — this is what keeps leads visible through
-  // database hiccups, PostgREST schema-cache errors, or any other transient
-  // /api/top-leads failure: none of it should blank the page that was
-  // showing real data a moment ago. Only ever shows data that was real at
-  // some point — never fabricated, never a placeholder.
-  const loadFromCache = (t) => {
-    try {
-      const raw = localStorage.getItem(cacheKey(t));
-      if (!raw) return false;
-      const cached = JSON.parse(raw);
-      setLeads(cached.leads || []);
-      setMeta(cached.meta || null);
-      setCacheTimestamp(cached.timestamp);
-      setShowingCache(true);
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const metrics=useMemo(()=>{const total=leads.length||1;const avg=Math.round(leads.reduce((s,l)=>s+Number(l.confidenceScore||0),0)/total);return{avg,ready:leads.filter(l=>Number(l.confidenceScore||0)>=70).length,needs:leads.filter(l=>Number(l.confidenceScore||0)<50).length,images:leads.filter(l=>l.sourceStatus?.imagery||l.imageUrl).length,years:leads.filter(l=>l.yearBuilt).length,permits:leads.filter(l=>l.permit?.checkedAt).length}},[leads]);
+  const filtered=useMemo(()=>leads.filter(l=>{const text=`${l.address||""} ${l.city||""} ${l.county||""} ${l.yearBuilt||""} ${l.propertyClass||""}`.toLowerCase();if(query&&!text.includes(query.toLowerCase()))return false;const c=Number(l.confidenceScore||0);if(confidenceFilter==="ready"&&c<70)return false;if(confidenceFilter==="building"&&(c<35||c>=70))return false;if(confidenceFilter==="weak"&&c>=35)return false;return true}),[leads,query,confidenceFilter]);
 
-  const saveToCache = (t, leadsData, metaData) => {
-    try {
-      localStorage.setItem(cacheKey(t), JSON.stringify({ leads: leadsData, meta: metaData, timestamp: Date.now() }));
-    } catch {
-      // localStorage full or unavailable (private browsing) — fail soft,
-      // this is a resilience feature, it should never itself cause an error.
-    }
-  };
+  return <main style={{minHeight:"100vh",background:"radial-gradient(circle at 82% 0,rgba(0,240,255,.10),transparent 32%),linear-gradient(180deg,#03080d 0%,#061019 45%,#020609 100%)",color:HUD.ice,fontFamily:HUD.fontMono,padding:"clamp(12px,2vw,24px)"}}>
+    <div style={{maxWidth:1600,margin:"0 auto"}}>
+      <header style={{display:"flex",justifyContent:"space-between",gap:18,alignItems:"end",flexWrap:"wrap",marginBottom:18}}><div><div style={{fontSize:10,letterSpacing:".20em",color:HUD.cyan}}>AEROLEADAI / ROOFING PROPERTY INTELLIGENCE</div><h1 style={{fontFamily:HUD.fontDisplay,fontSize:"clamp(28px,4vw,54px)",lineHeight:.95,margin:"7px 0",color:HUD.ice}}>Twin Cities Priority Engine</h1><div style={{fontSize:11,color:HUD.muted,maxWidth:900}}>Single-family residential leads first. Top 100 is the human-review front line. Top 500 stays ranked while permit, year-built, storm and imagery evidence are strengthened continuously.</div></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={()=>setAutoRefresh(v=>!v)} style={button(autoRefresh?HUD.green:HUD.lineDim,autoRefresh?HUD.green:HUD.muted)}>{autoRefresh?"● LIVE 60s":"○ LIVE OFF"}</button><button onClick={()=>load(tier)} style={button(HUD.green,HUD.green)}>↻ REFRESH</button></div></header>
 
-  const load = useCallback(async (t) => {
-    setLoading(true);
-    setError(null);
-    const hadCache = loadFromCache(t); // show something immediately, before the network call even starts
-    try {
-      const res = await fetch(`/api/top-leads?tier=${t}`);
-      const data = await res.json();
-      if (data.ok) {
-        setLeads(data.leads);
-        setMeta({ scanned: data.scanned, entered: data.entered, cap: data.cap });
-        setShowingCache(false);
-        saveToCache(t, data.leads, { scanned: data.scanned, entered: data.entered, cap: data.cap });
-      } else if (!hadCache) {
-        // Only show the error if there's genuinely nothing to fall back to
-        // — if cached data is already on screen, a live-fetch failure
-        // shouldn't rip it away and replace it with a red error message.
-        setError(data.error || data.note || "Unknown error");
-        setLeads([]);
-      }
-    } catch (e) {
-      if (!hadCache) setError(e.message);
-      // else: silently keep showing the cached data already on screen —
-      // the "showing cached data" banner already communicates this.
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      <section style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:14}}><Metric label="VISIBLE" value={leads.length}/><Metric label="AVG CONFIDENCE" value={`${metrics.avg}%`} tone={metrics.avg>=70?HUD.green:HUD.amber}/><Metric label="70%+ READY" value={metrics.ready} tone={HUD.green}/><Metric label="YEAR BUILT" value={`${metrics.years}/${leads.length}`} tone={HUD.cyan}/><Metric label="PERMIT CHECKED" value={`${metrics.permits}/${leads.length}`} tone={HUD.cyan}/><Metric label="IMAGERY" value={metrics.images} tone={HUD.cyan}/></section>
 
-  useEffect(() => { load(tier); }, [tier, load]);
+      <div style={{display:"flex",gap:9,flexWrap:"wrap",marginBottom:12}}>{TIERS.map(t=><button key={t.key} onClick={()=>chooseTier(t.key)} style={button(tier===t.key?HUD.cyan:HUD.lineDim,tier===t.key?HUD.cyan:HUD.muted)}>{t.label}</button>)}<button onClick={()=>window.location.href="/twincities/contractor-prospects"} style={button(HUD.green,HUD.green)}>🏠 CONTRACTOR COMMAND</button><button onClick={()=>window.location.href="/twincities/apex10"} style={button(HUD.amber,HUD.amber)}>🎯 APEX REPORT</button><button disabled={crawling} onClick={()=>runEvidenceCycle(false)} style={{...button(HUD.cyan,HUD.cyan),opacity:crawling?.55:1}}>{crawling?"🧠 SEARCHING…":"🧠 RUN EVIDENCE SWARM"}</button></div>
 
-  async function setReviewStatus(id, status) {
-    setLeads((cur) => cur.map((l) => (l.id === id ? { ...l, reviewStatus: status } : l)));
-    await fetch("/api/lead-review", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, status }),
-    });
-  }
+      <div style={{display:"grid",gridTemplateColumns:"minmax(220px,1fr) 180px",gap:8,marginBottom:12}}><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search address, city, county, year or class…" style={{background:"rgba(2,8,12,.8)",border:`1px solid ${HUD.lineDim}`,color:HUD.ice,borderRadius:7,padding:"10px 12px",fontFamily:HUD.fontMono,outline:"none"}}/><select value={confidenceFilter} onChange={e=>setConfidenceFilter(e.target.value)} style={{background:"#051017",border:`1px solid ${HUD.lineDim}`,color:HUD.ice,borderRadius:7,padding:"10px 12px",fontFamily:HUD.fontMono}}><option value="all">All confidence</option><option value="ready">70%+ ready</option><option value="building">35–69% building</option><option value="weak">Under 35%</option></select></div>
 
-  function toggleSelect(id) {
-    setSelected((cur) => ({ ...cur, [id]: !cur[id] }));
-  }
+      {meta&&<div style={{fontSize:10,color:HUD.muted,marginBottom:10}}>Scanned {meta.scanned??0} · Ranked {meta.entered??0} · Top 100 {meta.top100Count??0}/100 · Top 500 {meta.top500Count??0}/500 · Showing {filtered.length}/{leads.length} · Single-family priority {meta.singleFamilyPrioritized?"ON":"—"}</div>}
+      {crawlStatus&&<div style={{fontSize:10,color:crawlStatus.ok?HUD.green:HUD.red,marginBottom:12,padding:"9px 11px",border:`1px solid ${crawlStatus.ok?HUD.green:HUD.red}`,borderRadius:7,background:"rgba(0,0,0,.18)"}}>{crawlStatus.message}</div>}
+      {loading&&<div style={{color:HUD.cyan,fontSize:11,marginBottom:10}}>RANKING + RENDERING PROPERTIES…</div>}
+      {error&&<div style={{color:HUD.red,fontSize:11,marginBottom:10}}>Error: {error}</div>}
 
-  async function fetchImages() {
-    setCrawling(true);
-    setCrawlStatus(null);
-    try {
-      const res = await fetch("/api/image-crawler?limit=25");
-      const data = await res.json();
-      if (data.ok) {
-        setCrawlStatus({
-          ok: true,
-          message: data.note || `Processed ${data.processed} · Google ${data.google} · Mapbox ${data.mapbox} · Esri ${data.esri} · Failed ${data.failed}. Click again for the next batch.`,
-        });
-      } else {
-        setCrawlStatus({ ok: false, message: data.error || "Image crawl failed." });
-      }
-    } catch (e) {
-      setCrawlStatus({ ok: false, message: e.message });
-    } finally {
-      setCrawling(false);
-    }
-  }
-
-  async function runEvidenceCycle() {
-    setCrawling(true);
-    setCrawlStatus({ ok: true, message: "Solidifying Top-500 evidence: imagery + permits + weather + rescoring…" });
-    try {
-      const res = await fetch("/api/twincities/evidence-cycle", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ limit: 8 }),
-      });
-      const data = await res.json();
-      setCrawlStatus({
-        ok: !!data.ok,
-        message: data.ok
-          ? `Evidence cycle processed ${data.processed}. Permits, weather and imagery persisted; rescoring triggered.`
-          : (data.error || "Evidence cycle failed."),
-      });
-      if (data.ok) await load(tier);
-    } catch (e) {
-      setCrawlStatus({ ok: false, message: e.message });
-    } finally {
-      setCrawling(false);
-    }
-  }
-
-  async function exportToContractor() {
-    const leadIds = Object.keys(selected).filter((id) => selected[id]);
-    if (!contractorName.trim() || leadIds.length === 0) {
-      setExportStatus({ ok: false, message: "Enter a contractor name and select at least one lead." });
-      return;
-    }
-    setExportStatus({ ok: null, message: "Exporting…" });
-    const res = await fetch("/api/contractor-export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contractorName, leadIds, tier: `${tier}_${TIERS.find((t) => t.key === tier)?.cap}` }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setExportStatus({ ok: true, message: `Exported ${leadIds.length} leads to ${contractorName}.` });
-      setSelected({});
-      load(tier);
-    } else {
-      setExportStatus({ ok: false, message: data.error || "Export failed." });
-    }
-  }
-
-  return (
-    <div style={{ minHeight: "100vh", background: HUD.bg, color: HUD.ice, fontFamily: HUD.fontMono, padding: "20px 24px" }}>
-      <div style={{ marginBottom: 4, fontFamily: HUD.fontDisplay, fontSize: 20, fontWeight: 700, color: HUD.cyan, letterSpacing: "0.04em" }}>
-        TWIN CITIES PRIORITY ENGINE
-      </div>
-      <div style={{ fontSize: 12, color: HUD.muted, marginBottom: 18 }}>
-        Hennepin · Ramsey · Dakota · Scott · Carver · Anoka — Evidence Index v1.1, everything clickable, nothing requires opening Supabase.
-      </div>
-
-      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-        {TIERS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTier(t.key)}
-            style={{
-              padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700,
-              border: `1px solid ${tier === t.key ? HUD.cyan : HUD.lineDim}`,
-              background: tier === t.key ? "rgba(95,224,255,0.08)" : "transparent",
-              color: tier === t.key ? HUD.cyan : HUD.muted,
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
-        <button onClick={() => load(tier)} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.green }}>
-          ↻ Refresh
-        </button>
-        <button
-          onClick={() => window.open("/twincities/contractor-prospects", "_blank", "noopener,noreferrer")}
-          style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.green}`, background: "rgba(61,220,151,0.08)", color: HUD.green }}
-        >
-          🏠 Contractor Prospects + Pitches
-        </button>
-        <button
-          onClick={() => window.open("/twincities/apex10", "_blank", "noopener,noreferrer")}
-          style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.amber}`, background: "rgba(255,190,80,0.08)", color: HUD.amber }}
-        >
-          🎯 APEX 10 Report
-        </button>
-        <button
-          onClick={runEvidenceCycle}
-          disabled={crawling}
-          style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.cyan}`, background: "rgba(95,224,255,0.08)", color: HUD.cyan, opacity: crawling ? 0.6 : 1 }}
-        >
-          {crawling ? "🧠 Solidifying…" : "🧠 Solidify Top 500"}
-        </button>
-        <button
-          onClick={fetchImages}
-          disabled={crawling}
-          style={{ padding: "8px 16px", borderRadius: 4, cursor: crawling ? "default" : "pointer", fontSize: 12, border: `1px solid ${HUD.lineDim}`, background: "transparent", color: HUD.amber, opacity: crawling ? 0.6 : 1 }}
-        >
-          {crawling ? "📷 Fetching Top 500…" : "📷 Top-500 Images (next 25)"}
-        </button>
-      </div>
-
-      {crawlStatus && (
-        <div style={{ fontSize: 11, color: crawlStatus.ok ? HUD.green : HUD.red, marginBottom: 12 }}>
-          {crawlStatus.message}
-        </div>
-      )}
-
-      {meta && (
-        <div style={{ fontSize: 11, color: HUD.muted, marginBottom: 12 }}>
-          Scanned {meta.scanned} · Entered Evidence Index {meta.entered} · Cap {meta.cap}
-        </div>
-      )}
-
-      {showingCache && cacheTimestamp && (
-        <div style={{ fontSize: 12, color: HUD.amber, marginBottom: 12, padding: "8px 12px", border: `1px solid ${HUD.amber}`, borderRadius: 4 }}>
-          📴 Showing cached data from {new Date(cacheTimestamp).toLocaleString()} — live refresh {loading ? "in progress…" : "failed or hasn't run yet"}. This is real data from the last successful load, not placeholder content.
-        </div>
-      )}
-
-      {loading && <div style={{ color: HUD.muted, fontSize: 13 }}>Scoring…</div>}
-      {error && <div style={{ color: HUD.red, fontSize: 13, marginBottom: 12 }}>Error: {error}</div>}
-
-      {tier === "contractor" && (
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, padding: 12, border: `1px solid ${HUD.lineDim}`, borderRadius: 4 }}>
-          <input
-            value={contractorName}
-            onChange={(e) => setContractorName(e.target.value)}
-            placeholder="Contractor name…"
-            style={{ padding: "7px 10px", background: "transparent", border: `1px solid ${HUD.lineDim}`, borderRadius: 4, color: HUD.ice, fontSize: 12, minWidth: 200 }}
-          />
-          <button onClick={exportToContractor} style={{ padding: "8px 16px", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 700, border: `1px solid ${HUD.green}`, background: "rgba(61,220,151,0.08)", color: HUD.green }}>
-            Export selected ({Object.values(selected).filter(Boolean).length}) →
-          </button>
-          {exportStatus && <span style={{ fontSize: 12, color: exportStatus.ok ? HUD.green : exportStatus.ok === false ? HUD.red : HUD.muted }}>{exportStatus.message}</span>}
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {leads.map((lead) => (
-          <div key={lead.id} style={{ border: `1px solid ${HUD.lineDim}`, borderRadius: 4, padding: "10px 14px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              {tier === "contractor" && (
-                <input type="checkbox" checked={!!selected[lead.id]} onChange={() => toggleSelect(lead.id)} />
-              )}
-              {lead.imageUrl ? (
-                <img
-                  src={lead.imageUrl}
-                  alt={lead.address}
-                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4, flexShrink: 0, border: `1px solid ${HUD.lineDim}` }}
-                />
-              ) : (
-                <div
-                  title="No image yet"
-                  style={{ width: 64, height: 64, flexShrink: 0, borderRadius: 4, border: `1px dashed ${HUD.lineDim}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: HUD.muted, textAlign: "center", padding: 4 }}
-                >
-                  no image yet
-                </div>
-              )}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{lead.address}</div>
-                <div style={{ fontSize: 11, color: HUD.muted }}>{lead.city} · {COUNTY_LABEL[lead.county] || lead.county} County</div>
-              </div>
-              <div style={{ textAlign: "right", fontSize: 11, color: HUD.muted }}>
-                Evidence <span style={{ color: HUD.ice, fontWeight: 700 }}>{lead.evidenceScore}</span> · Confidence <span style={{ color: HUD.ice, fontWeight: 700 }}>{lead.confidenceScore}%</span>
-              </div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: HUD.cyan, minWidth: 60, textAlign: "right" }}>{lead.priorityScore}</div>
-              <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 10, color: REVIEW_COLOR[lead.reviewStatus] || HUD.muted, border: `1px solid ${REVIEW_COLOR[lead.reviewStatus] || HUD.muted}` }}>
-                {lead.reviewStatus?.toUpperCase()}
-              </span>
-              <button onClick={() => setExpanded(expanded === lead.id ? null : lead.id)} style={{ padding: "5px 10px", fontSize: 11, cursor: "pointer", background: "transparent", border: `1px solid ${HUD.lineDim}`, borderRadius: 4, color: HUD.muted }}>
-                {expanded === lead.id ? "Hide" : "Why?"}
-              </button>
-            </div>
-
-            {expanded === lead.id && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${HUD.lineDim}`, display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
-                <div style={{ fontSize: 11, color: HUD.muted }}>
-                  <div style={{ color: HUD.ice, fontWeight: 700, marginBottom: 4 }}>Evidence breakdown</div>
-                  {Object.entries(lead.breakdown || {}).map(([k, v]) => (
-                    <div key={k}>{k.replace(/_/g, " ")}: <span style={{ color: HUD.ice }}>{v}</span></div>
-                  ))}
-                  {(!lead.breakdown || Object.keys(lead.breakdown).length === 0) && <div>No breakdown recorded.</div>}
-                </div>
-                <div style={{ fontSize: 11, color: HUD.muted }}>
-                  <div style={{ color: HUD.ice, fontWeight: 700, marginBottom: 4 }}>Assessed value</div>
-                  {lead.assessedValue ? `$${lead.assessedValue.toLocaleString()}` : "Not enriched yet"}
-                </div>
-                <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-                  <button onClick={() => setReviewStatus(lead.id, "approved")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.green}`, background: "transparent", color: HUD.green, borderRadius: 4 }}>Approve</button>
-                  <button onClick={() => setReviewStatus(lead.id, "partial")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.cyan}`, background: "transparent", color: HUD.cyan, borderRadius: 4 }}>Partial</button>
-                  <button onClick={() => setReviewStatus(lead.id, "needs_images")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.muted}`, background: "transparent", color: HUD.muted, borderRadius: 4 }}>Needs images</button>
-                  <button onClick={() => setReviewStatus(lead.id, "rejected")} style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", border: `1px solid ${HUD.red}`, background: "transparent", color: HUD.red, borderRadius: 4 }}>Reject</button>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-
-        {!loading && leads.length === 0 && !error && (
-          <div style={{ color: HUD.muted, fontSize: 13, padding: 20, textAlign: "center" }}>No leads in this tier yet.</div>
-        )}
-      </div>
-    </div>
-  );
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>{filtered.map((lead,idx)=><LeadRow key={lead.id||`${lead.address}-${idx}`} lead={lead} idx={idx} tier={tier} expanded={expanded===lead.id} toggle={()=>setExpanded(expanded===lead.id?null:lead.id)} openImage={()=>setImageLead(lead)} review={setReviewStatus}/>)}</div>
+      {!loading&&!filtered.length&&<div style={{padding:30,textAlign:"center",border:`1px dashed ${HUD.lineDim}`,borderRadius:9,color:HUD.muted}}>No eligible single-family residential properties match this view.</div>}
+    </div>{imageLead&&<ImageViewer lead={imageLead} close={()=>setImageLead(null)}/>} 
+  </main>
 }
+
+function Metric({label,value,tone=HUD.cyan}){return <div style={{border:`1px solid ${HUD.lineDim}`,borderRadius:8,padding:"11px 12px",background:"rgba(4,15,22,.72)",boxShadow:"0 14px 42px rgba(0,0,0,.18)"}}><div style={{fontSize:9,color:HUD.muted,letterSpacing:".10em"}}>{label}</div><div style={{fontSize:24,fontWeight:900,color:tone,marginTop:4}}>{value}</div></div>}
+function LeadRow({lead,idx,tier,expanded,toggle,openImage,review}){const status=lead.sourceStatus||{},permit=lead.permit||{};const sourceCount=[status.permit,status.storm,status.assessor,status.imagery].filter(Boolean).length;return <article style={{border:`1px solid ${expanded?HUD.cyan:HUD.lineDim}`,borderRadius:9,background:"rgba(5,14,20,.82)",overflow:"hidden"}}><div style={{display:"grid",gridTemplateColumns:"44px 84px minmax(240px,1.2fr) minmax(260px,1fr) 90px 118px",gap:12,alignItems:"center",padding:"12px 13px",overflowX:"auto"}}><div style={{color:HUD.cyan,fontSize:13,fontWeight:900}}>#{lead.rank||idx+1}</div><button onClick={openImage} title="Open property imagery" style={{padding:0,border:`1px solid ${HUD.lineDim}`,borderRadius:6,overflow:"hidden",height:72,width:72,background:"#020608",cursor:"zoom-in"}}>{lead.imageUrl?<img src={lead.imageUrl} alt={lead.address} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>:<span style={{fontSize:9,color:HUD.muted}}>NO IMAGE</span>}</button><div><div style={{fontSize:13,fontWeight:800,lineHeight:1.25,minWidth:230}}>{lead.address}</div><div style={{fontSize:10,color:HUD.muted,marginTop:3}}>{lead.city} · {COUNTY_LABEL[lead.county]||lead.county} County</div><div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}><Tag text={lead.yearBuilt?`BUILT ${lead.yearBuilt}`:"YEAR NEEDED"} ok={!!lead.yearBuilt}/><Tag text={lead.propertyClass||"RESIDENTIAL CANDIDATE"} ok={lead.singleFamilySignal>0}/><Tag text={permit.checkedAt?`PERMITS ${permit.count}`:"PERMIT SEARCH NEEDED"} ok={!!permit.checkedAt}/></div></div><div><div style={{fontSize:10,color:HUD.muted}}>Evidence <b style={{color:HUD.ice}}>{lead.evidenceScore}</b> · Confidence <b style={{color:lead.confidenceScore>=70?HUD.green:lead.confidenceScore>=35?HUD.amber:HUD.red}}>{lead.confidenceScore}%</b></div><div style={{fontSize:9,color:HUD.muted,marginTop:5}}>Roof permits {permit.roofCount??0} · Recent roof permit {permit.within10y===true?"YES":permit.within10y===false?"NO":"UNKNOWN"}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:7}}><SourcePill label="PERMIT" ok={status.permit}/><SourcePill label="STORM" ok={status.storm}/><SourcePill label="VALUE" ok={status.assessor}/><SourcePill label="IMAGE" ok={status.imagery}/></div><div style={{fontSize:9,color:HUD.muted,marginTop:5}}>{sourceCount}/4 machine evidence lanes complete</div></div><div style={{fontSize:20,fontWeight:900,color:HUD.cyan,textAlign:"right"}}>{lead.priorityScore}</div><div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"stretch"}}><a href={lead.streetViewUrl} target="_blank" rel="noreferrer" style={{...button(HUD.green,HUD.green),display:"block",textAlign:"center",textDecoration:"none"}}>STREET VIEW ↗</a><button onClick={toggle} style={button(HUD.cyan,HUD.cyan)}>{expanded?"HIDE":"SCORECARD"}</button></div></div>{expanded&&<Scorecard lead={lead} tier={tier} review={review} openImage={openImage}/>}</article>}
+function Scorecard({lead,tier,review,openImage}){const status=lead.sourceStatus||{},permit=lead.permit||{};return <div style={{borderTop:`1px solid ${HUD.lineDim}`,padding:14,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12,background:"rgba(0,0,0,.22)"}}><Panel title="WHY THIS RANK"><div style={{fontSize:12}}>Priority score <b style={{color:HUD.cyan}}>{lead.priorityScore}</b></div><div style={{fontSize:10,color:HUD.muted,marginTop:6}}>Evidence {lead.evidenceScore} · Confidence {lead.confidenceScore}% · Tier {lead.tier||"—"}</div><div style={{marginTop:8}}>{Object.entries(lead.breakdown||{}).map(([k,v])=><div key={k} style={{fontSize:10,color:HUD.muted,margin:"3px 0"}}>{k.replace(/_/g," ")}: <b style={{color:HUD.ice}}>{String(v)}</b></div>)}</div></Panel><Panel title="ROOFING PROPERTY INDEX"><DataLine label="Year built" value={lead.yearBuilt||"SEARCH NEEDED"}/><DataLine label="Property age" value={lead.propertyAgeYears!=null?`${lead.propertyAgeYears} years`:"SEARCH NEEDED"}/><DataLine label="Property class" value={lead.propertyClass||"UNKNOWN"}/><DataLine label="Assessed value" value={lead.assessedValue?`$${Number(lead.assessedValue).toLocaleString()}`:"SEARCH NEEDED"}/><DataLine label="Permits checked" value={permit.checkedAt?"YES":"SEARCH NEEDED"}/><DataLine label="Permit records" value={permit.count??0}/><DataLine label="Roof permits" value={permit.roofCount??0}/><DataLine label="Roof permit ≤10y" value={permit.within10y===true?"YES":permit.within10y===false?"NO":"UNKNOWN"}/></Panel><Panel title="CONFIDENCE SOURCES"><SourceLine label="Permit search" ok={status.permit}/><SourceLine label="Storm/weather search" ok={status.storm}/><SourceLine label="Assessor/year built" ok={status.assessor&&!!lead.yearBuilt}/><SourceLine label="Imagery evidence" ok={status.imagery}/><div style={{fontSize:9,color:HUD.muted,marginTop:7}}>Missing evidence is shown explicitly; it is never treated as completed.</div></Panel><Panel title="PROPERTY REVIEW"><button onClick={openImage} style={{...button(HUD.cyan,HUD.cyan),width:"100%"}}>OPEN IMAGE</button><a href={lead.streetViewUrl} target="_blank" rel="noreferrer" style={{...button(HUD.green,HUD.green),display:"block",textAlign:"center",textDecoration:"none",marginTop:7}}>OPEN GOOGLE STREET VIEW ↗</a><a href={lead.googleMapsUrl} target="_blank" rel="noreferrer" style={{...button(HUD.green,HUD.green),display:"block",textAlign:"center",textDecoration:"none",marginTop:7}}>OPEN GOOGLE MAPS ↗</a></Panel><Panel title="HUMAN REVIEW"><div style={{fontSize:10,color:HUD.muted,marginBottom:8}}>Review roof imagery, Street View, permits and age before disposition.</div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button onClick={()=>review(lead.id,"approved")} style={button(HUD.green,HUD.green)}>APPROVE</button><button onClick={()=>review(lead.id,"partial")} style={button(HUD.cyan,HUD.cyan)}>PARTIAL</button><button onClick={()=>review(lead.id,"needs_images")} style={button(HUD.amber,HUD.amber)}>NEEDS IMAGE</button><button onClick={()=>review(lead.id,"rejected")} style={button(HUD.red,HUD.red)}>REJECT</button></div>{tier==="review"&&<div style={{fontSize:9,color:HUD.amber,marginTop:8}}>Human review complements machine evidence; it does not replace missing evidence.</div>}</Panel></div>}
+function ImageViewer({lead,close}){return <div onClick={close} style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,.90)",display:"grid",placeItems:"center",padding:14}}><div onClick={e=>e.stopPropagation()} style={{width:"min(1160px,97vw)",maxHeight:"94vh",overflow:"auto",background:"#041016",border:`1px solid ${HUD.cyan}`,borderRadius:10,padding:12}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:10}}><div><b>{lead.address}</b><div style={{fontSize:9,color:HUD.muted}}>Roof review · Built {lead.yearBuilt||"unknown"} · Confidence {lead.confidenceScore}% · Score {lead.priorityScore}</div></div><button onClick={close} style={button(HUD.red,HUD.red)}>CLOSE ✕</button></div>{lead.imageUrl?<img src={lead.imageUrl} alt={lead.address} style={{width:"100%",maxHeight:"70vh",objectFit:"contain",background:"#000",display:"block"}}/>:<div style={{height:400,display:"grid",placeItems:"center",color:HUD.muted}}>No image available yet.</div>}<div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>{lead.imageUrl&&<a href={lead.imageUrl} target="_blank" rel="noreferrer" style={{...button(HUD.cyan,HUD.cyan),textDecoration:"none"}}>OPEN IMAGE SOURCE ↗</a>}<a href={lead.streetViewUrl} target="_blank" rel="noreferrer" style={{...button(HUD.green,HUD.green),textDecoration:"none"}}>GOOGLE STREET VIEW ↗</a><a href={lead.googleMapsUrl} target="_blank" rel="noreferrer" style={{...button(HUD.green,HUD.green),textDecoration:"none"}}>GOOGLE MAPS ↗</a></div></div></div>}
+function Panel({title,children}){return <div style={{border:`1px solid ${HUD.lineDim}`,borderRadius:7,padding:11,background:"rgba(4,15,22,.45)"}}><div style={{fontSize:10,color:HUD.cyan,fontWeight:900,letterSpacing:".08em",marginBottom:8}}>{title}</div>{children}</div>}
+function SourcePill({label,ok}){return <span style={{fontSize:8,padding:"3px 5px",borderRadius:8,border:`1px solid ${ok?HUD.green:HUD.lineDim}`,color:ok?HUD.green:HUD.muted}}>{ok?"✓":"○"} {label}</span>}
+function SourceLine({label,ok}){return <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:10,padding:"4px 0",color:HUD.muted}}><span>{label}</span><b style={{color:ok?HUD.green:HUD.amber}}>{ok?"COMPLETE":"SEARCH NEEDED"}</b></div>}
+function DataLine({label,value}){return <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:10,padding:"4px 0",borderBottom:`1px solid ${HUD.lineDim}`,color:HUD.muted}}><span>{label}</span><b style={{color:HUD.ice,textAlign:"right"}}>{String(value)}</b></div>}
+function Tag({text,ok}){return <span style={{fontSize:8,padding:"3px 5px",borderRadius:8,border:`1px solid ${ok?HUD.green:HUD.lineDim}`,color:ok?HUD.green:HUD.amber}}>{text}</span>}
+function button(border,color){return {padding:"8px 11px",borderRadius:6,cursor:"pointer",fontSize:10,fontWeight:800,border:`1px solid ${border}`,background:"rgba(0,0,0,.16)",color}}

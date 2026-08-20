@@ -1,4 +1,5 @@
 import { launchCampaign, listCampaigns, proposeBudgetReallocation } from "../../../../lib/marketing/campaigns";
+export const dynamic = "force-dynamic";
 
 export async function GET(req) {
   const wantReallocation = new URL(req.url).searchParams.get("reallocation");

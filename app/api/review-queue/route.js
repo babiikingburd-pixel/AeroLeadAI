@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { gateConfig, evaluatePromotion, summarizeBlockers, calculateEvidenceDebt } from "../../../lib/twincities/evidenceDebt";
+export const dynamic = "force-dynamic";
 
 // Feeds the fast single-card review workflow (/twincities/review). Reuses
 // the same review_status field /api/lead-review already writes to and

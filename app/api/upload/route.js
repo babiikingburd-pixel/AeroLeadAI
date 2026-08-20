@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabaseAdmin } from "../../../lib/supabase";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 30;
 

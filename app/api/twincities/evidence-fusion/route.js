@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { fuseEvidence, recordFusion } from "../../../../lib/twincities/evidenceFusion";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 function authorized(req) {

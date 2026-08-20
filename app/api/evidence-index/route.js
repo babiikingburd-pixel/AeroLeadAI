@@ -1,6 +1,7 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { runPipeline } from "../../../lib/evidenceIndex/pipeline";
 import { SUPPORTED_COUNTIES } from "../../../lib/evidenceIndex/config";
+export const dynamic = "force-dynamic";
 
 // GET|POST /api/evidence-index?limit=50&county=hennepin
 //

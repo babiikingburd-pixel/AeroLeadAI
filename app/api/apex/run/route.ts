@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiKey } from "@/lib/auth";
+export const dynamic = "force-dynamic";
 
 // Single entry point that runs the full loop the video described:
 // generate due tasks -> run a worker batch -> run one governance cycle.

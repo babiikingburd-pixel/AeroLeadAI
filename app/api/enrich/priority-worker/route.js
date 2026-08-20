@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
 import { applyEvidenceAndRescore } from "../../../../lib/twincities/evidenceEvents";
+export const dynamic = "force-dynamic";
 
 // PRIORITY ENRICHMENT WORKER
 //

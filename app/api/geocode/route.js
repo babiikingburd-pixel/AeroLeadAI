@@ -4,6 +4,7 @@
 
 import { cacheGet, cacheSet } from "../../../lib/serverCache";
 import { isValidAddress } from "../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 export async function POST(req) {
   const { address } = await req.json();

@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 // POST /api/contractor-export
 // body: { contractorName: string, zipCode?: string, county?: string, leadIds: string[], tier: 'candidates_500'|'review_100'|'contractor_20' }

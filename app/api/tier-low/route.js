@@ -24,6 +24,7 @@ import { supabaseGet } from "../../../lib/supabaseRest";
 import { withCrawlerLog } from "../../../lib/crawlerLog";
 import { planCycle } from "../../../lib/planner";
 import { create, listActive, evaluate } from "../../../lib/agentFactory";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 

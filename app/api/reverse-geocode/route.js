@@ -2,6 +2,7 @@
 // Census Bureau reverse geocoder first (free, keyless, US), Nominatim fallback.
 import { cacheGet, cacheSet } from "../../../lib/serverCache";
 import { isValidLatLon } from "../../../lib/validate";
+export const dynamic = "force-dynamic";
 
 export async function POST(req) {
   const { lat, lon } = await req.json();

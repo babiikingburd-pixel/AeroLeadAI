@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+export const dynamic = "force-dynamic";
 
 function authorized(req) {
   const secret = process.env.CRON_SECRET;

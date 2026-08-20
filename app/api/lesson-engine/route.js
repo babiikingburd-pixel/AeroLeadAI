@@ -22,6 +22,7 @@
 
 import { supabaseGet, supabasePost, supabasePatch } from "../../../lib/supabaseRest";
 import { withCrawlerLog } from "../../../lib/crawlerLog";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 

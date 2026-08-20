@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
 import { requireApiKey } from "@/lib/auth";
+export const dynamic = "force-dynamic";
 
 // Fills the EXISTING top500_slots table (it has 500 rows, but they start
 // empty — property_id null, status 'open') from batch_leads ranked by the

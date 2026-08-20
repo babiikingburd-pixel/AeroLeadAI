@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { SUPPORTED_COUNTIES } from "../../../lib/twincities/propertyValue";
+export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
 
