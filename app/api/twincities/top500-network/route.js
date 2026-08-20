@@ -22,6 +22,15 @@ function auth(req) {
     new URL(req.url).searchParams.get("secret") === secret;
 }
 
+function internalAccessHeaders(req) {
+  const headers = {};
+  for (const name of ["authorization", "cookie", "x-api-key"]) {
+    const value = req.headers.get(name);
+    if (value) headers[name] = value;
+  }
+  return headers;
+}
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function classifyResidential(row) {
@@ -74,7 +83,7 @@ async function finishTask(supabase, task, patch) {
   }).eq("task_id", task.task_id);
 }
 
-async function processTask(supabase, task, origin) {
+async function processTask(supabase, task, origin, accessHeaders) {
   const { data: row, error } = await supabase.from("batch_leads").select("*").eq("id", task.property_id).maybeSingle();
   if (error || !row) {
     await finishTask(supabase, task, { status: "failed", last_error: error?.message || "Property not found" });
@@ -103,7 +112,7 @@ async function processTask(supabase, task, origin) {
     }
 
     if (task.lane_name === "permits") {
-      const r = await fetch(`${origin}/api/permit-lookup?address=${encodeURIComponent(address)}`, { signal: AbortSignal.timeout(12000) });
+      const r = await fetch(`${origin}/api/permit-lookup?address=${encodeURIComponent(address)}`, { headers: accessHeaders, signal: AbortSignal.timeout(12000) });
       const data = await r.json().catch(()=>({}));
       if (!r.ok) throw new Error(`permit lookup HTTP ${r.status}`);
       const records = Array.isArray(data.records) ? data.records : [];
@@ -134,7 +143,7 @@ async function processTask(supabase, task, origin) {
     if (task.lane_name === "storm") {
       if (row.lat == null || row.lon == null) throw new Error("Missing coordinates");
       const r = await fetch(`${origin}/api/weather-agent`, {
-        method:"POST", headers:{"content-type":"application/json"},
+        method:"POST", headers:{...accessHeaders,"content-type":"application/json"},
         body:JSON.stringify({lat:row.lat,lon:row.lon,address}),
         signal:AbortSignal.timeout(12000),
       });
@@ -154,7 +163,7 @@ async function processTask(supabase, task, origin) {
     if (task.lane_name === "imagery") {
       if (row.lat == null || row.lon == null) throw new Error("Missing coordinates");
       const r = await fetch(`${origin}/api/imagery-agent`, {
-        method:"POST", headers:{"content-type":"application/json"},
+        method:"POST", headers:{...accessHeaders,"content-type":"application/json"},
         // The daily Hobby worker needs the two overhead roof views first.
         // Street-view sweeps are slower and damage has its own review lane.
         body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:true,force:false}),
@@ -178,7 +187,7 @@ async function processTask(supabase, task, origin) {
     if (task.lane_name === "damage") {
       if (row.lat == null || row.lon == null) throw new Error("Missing coordinates");
       const imgR = await fetch(`${origin}/api/imagery-agent`, {
-        method:"POST", headers:{"content-type":"application/json"},
+        method:"POST", headers:{...accessHeaders,"content-type":"application/json"},
         body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:true,force:true}),
         signal:AbortSignal.timeout(18000),
       });
@@ -187,7 +196,7 @@ async function processTask(supabase, task, origin) {
       const match = String(img.dataUrl).match(/^data:(image\/[a-zA-Z+]+);base64,(.*)$/);
       if (!match) throw new Error("Imagery response had no data URL");
       const scoreR = await fetch(`${origin}/api/damage-agent`, {
-        method:"POST", headers:{"content-type":"application/json"},
+        method:"POST", headers:{...accessHeaders,"content-type":"application/json"},
         body:JSON.stringify({domain:"roof",base64Image:match[2],mediaType:match[1],address,leadId:row.id,top500:true}),
         signal:AbortSignal.timeout(30000),
       });
@@ -343,7 +352,8 @@ export async function POST(req) {
     // and vision. Serial execution made two such claims exceed Hobby's 60s
     // function ceiling. SKIP LOCKED already isolates the claimed tasks, so
     // execute this small bounded batch concurrently.
-    const results=await Promise.all((tasks||[]).map(task=>processTask(supabase,task,new URL(req.url).origin)));
+    const accessHeaders=internalAccessHeaders(req);
+    const results=await Promise.all((tasks||[]).map(task=>processTask(supabase,task,new URL(req.url).origin,accessHeaders)));
     return Response.json({ok:true,version:"APEX14.1",workerId,claimed:tasks?.length||0,results});
   } catch(e) {
     return Response.json({ok:false,error:e.message},{status:500});

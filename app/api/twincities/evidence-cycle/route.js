@@ -19,6 +19,11 @@ function auth(req){
   if(!secret) return true;
   return req.headers.get("authorization")===`Bearer ${secret}`||new URL(req.url).searchParams.get("secret")===secret;
 }
+function internalAccessHeaders(req){
+  const headers={};
+  for(const name of ["authorization","cookie","x-api-key"]){const value=req.headers.get(name);if(value)headers[name]=value;}
+  return headers;
+}
 async function fetchJson(url,options={},timeout=9000){
   try{const res=await fetch(url,{...options,signal:AbortSignal.timeout(timeout)});const data=await res.json().catch(()=>({}));return{ok:res.ok,status:res.status,data};}
   catch(e){return{ok:false,status:0,data:{error:e.message}};}
@@ -39,12 +44,12 @@ function selectSwarm(rows,limit){
   return picked.slice(0,limit);
 }
 
-async function processRow(row,origin,supabase){
+async function processRow(row,origin,supabase,accessHeaders){
   const address=`${row.address}, ${row.city||""}, MN`,started=new Date().toISOString();
   const [permit,weather,imagery,value]=await Promise.all([
-    fetchJson(`${origin}/api/permit-lookup?address=${encodeURIComponent(address)}`,{},7000),
-    fetchJson(`${origin}/api/weather-agent`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({lat:row.lat,lon:row.lon,address})},7000),
-    fetchJson(`${origin}/api/imagery-agent`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:true,force:false})},9000),
+    fetchJson(`${origin}/api/permit-lookup?address=${encodeURIComponent(address)}`,{headers:accessHeaders},7000),
+    fetchJson(`${origin}/api/weather-agent`,{method:"POST",headers:{...accessHeaders,"content-type":"application/json"},body:JSON.stringify({lat:row.lat,lon:row.lon,address})},7000),
+    fetchJson(`${origin}/api/imagery-agent`,{method:"POST",headers:{...accessHeaders,"content-type":"application/json"},body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:true,force:false})},9000),
     enrichLeadValue({county:row.county,lat:row.lat,lon:row.lon,address:row.address},supabase).catch(()=>null),
   ]);
   const records=Array.isArray(permit.data?.records)?permit.data.records:[];
@@ -87,7 +92,8 @@ export async function POST(req){
   if(!ranked?.length)return Response.json({ok:true,processed:0,persisted:0,note:"No scored candidates remain."});
   const rows=selectSwarm(ranked,limit);
   if(!rows.length)return Response.json({ok:true,processed:0,persisted:0,note:"No eligible residential roofing candidates remain in this pool."});
-  const results=await Promise.all(rows.map(r=>processRow(r,origin,supabase)));
+  const accessHeaders=internalAccessHeaders(req);
+  const results=await Promise.all(rows.map(r=>processRow(r,origin,supabase,accessHeaders)));
   const persisted=results.filter(r=>r.persisted).length;
   return Response.json({ok:true,version:"AERO16-ROOFING-RESTORE",processed:results.length,persisted,poolSize:ranked.length,eligiblePool:ranked.filter(residentialEnough).length,results,note:"Permit, assessor/year-built, weather and imagery evidence persisted together."});
 }

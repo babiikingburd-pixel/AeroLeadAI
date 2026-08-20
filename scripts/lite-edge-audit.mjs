@@ -143,6 +143,7 @@ const securityFiles = {
   taskCompletionMigration: read("supabase/migrations/20260820i_normalize_task_completion.sql"),
   imageryBackfillMigration: read("supabase/migrations/20260820j_prioritize_imagery_backfill.sql"),
   top500Network: read("app/api/twincities/top500-network/route.js"),
+  evidenceCycle: read("app/api/twincities/evidence-cycle/route.js"),
   top500Burst: read("app/api/cron/top500-burst/[shard]/route.ts"),
   leaderboardCron: read("app/api/cron/apex-leaderboard/route.ts"),
   serviceProxy: read("supabase/functions/aerolead-service-proxy/index.ts"),
@@ -184,6 +185,10 @@ assert.ok(!/status:\s*["']complete["']/.test(securityFiles.top500Network), "craw
 assert.ok(securityFiles.top500Network.includes('rankingEngine: "lite_evidence_twin"'), "network pulse must preserve the canonical Lite ranking");
 assert.ok(securityFiles.top500Network.includes("Promise.all((tasks||[]).map"), "bounded crawler claims must run concurrently within Hobby's timeout");
 assert.ok(securityFiles.top500Network.includes("lite:true,force:false"), "bulk imagery must use the fast cached overhead path");
+assert.ok(securityFiles.top500Network.includes("internalAccessHeaders(req)"), "Hobby workers must forward cron/owner authorization to internal evidence routes");
+assert.ok(securityFiles.top500Network.includes("headers:{...accessHeaders"), "Top 500 evidence calls must carry their internal authorization");
+assert.ok(securityFiles.evidenceCycle.includes("internalAccessHeaders(req)"), "manual evidence swarms must forward owner authorization to internal workers");
+assert.ok(securityFiles.evidenceCycle.includes("headers:{...accessHeaders"), "manual imagery and weather calls must carry owner authorization");
 assert.ok(securityFiles.top500Network.includes("imagery: 30 * 86400"), "imagery refreshes must follow the 30-day cache horizon");
 assert.ok(securityFiles.imageryBackfillMigration.includes("priority = 2000"), "initial Top 500 imagery must outrank secondary crawler lanes");
 assert.ok(securityFiles.top500Burst.includes("CRON_SECRET"), "imagery burst endpoints must require Vercel cron authentication");
