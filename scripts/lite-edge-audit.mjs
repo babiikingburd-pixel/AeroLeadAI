@@ -145,6 +145,8 @@ const securityFiles = {
   top500Network: read("app/api/twincities/top500-network/route.js"),
   top500Burst: read("app/api/cron/top500-burst/[shard]/route.ts"),
   leaderboardCron: read("app/api/cron/apex-leaderboard/route.ts"),
+  serviceProxy: read("supabase/functions/aerolead-service-proxy/index.ts"),
+  gatewayCheck: read("app/api/auth/gateway-check/route.js"),
 };
 assert.ok(!/SUPABASE_ANON_KEY|PUBLISHABLE_KEY/.test(securityFiles.server), "server client must not fall back to public keys");
 const browserSource = walkFiles("components").map(read).join("\n");
@@ -182,6 +184,10 @@ assert.ok(securityFiles.top500Network.includes("imagery: 30 * 86400"), "imagery 
 assert.ok(securityFiles.imageryBackfillMigration.includes("priority = 2000"), "initial Top 500 imagery must outrank secondary crawler lanes");
 assert.ok(securityFiles.top500Burst.includes("CRON_SECRET"), "imagery burst endpoints must require Vercel cron authentication");
 assert.ok(securityFiles.top500Burst.includes("limit: 8"), "each daily burst must stay bounded");
+assert.ok(securityFiles.serviceProxy.includes('Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")'), "clean-project proxy must keep the service role inside Supabase");
+assert.ok(securityFiles.serviceProxy.includes("verifyWithAeroLeadAI"), "service-role proxy must verify AeroLeadAI's signed server request");
+assert.ok(securityFiles.serviceProxy.includes('const ALLOWED_PATHS = ["/rest/v1/", "/storage/v1/"]'), "service-role proxy must restrict upstream namespaces");
+assert.ok(securityFiles.gatewayCheck.includes("verifyGatewaySignature"), "Vercel must verify every new proxy authorization session");
 assert.ok(securityFiles.leaderboardCron.includes("seedCedarSpiral"), "daily leaderboard cron must advance the Cedar spiral before scoring");
 assert.ok(securityFiles.leaderboardCron.includes("p_keep: LEADERBOARD_LIMIT"), "daily leaderboard cron must retain only the Top 500 spiral candidates");
 
