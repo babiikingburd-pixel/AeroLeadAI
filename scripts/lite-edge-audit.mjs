@@ -142,6 +142,7 @@ const securityFiles = {
   boundedCrawlerQueue: read("supabase/migrations/20260820h_bounded_crawler_queue.sql"),
   taskCompletionMigration: read("supabase/migrations/20260820i_normalize_task_completion.sql"),
   imageryBackfillMigration: read("supabase/migrations/20260820j_prioritize_imagery_backfill.sql"),
+  imageryClaimMigration: read("supabase/migrations/20260820k_imagery_only_claim.sql"),
   top500Network: read("app/api/twincities/top500-network/route.js"),
   evidenceCycle: read("app/api/twincities/evidence-cycle/route.js"),
   top500Burst: read("app/api/cron/top500-burst/[shard]/route.ts"),
@@ -191,8 +192,12 @@ assert.ok(securityFiles.evidenceCycle.includes("internalAccessHeaders(req)"), "m
 assert.ok(securityFiles.evidenceCycle.includes("headers:{...accessHeaders"), "manual imagery and weather calls must carry owner authorization");
 assert.ok(securityFiles.top500Network.includes("imagery: 30 * 86400"), "imagery refreshes must follow the 30-day cache horizon");
 assert.ok(securityFiles.imageryBackfillMigration.includes("priority = 2000"), "initial Top 500 imagery must outrank secondary crawler lanes");
+assert.ok(securityFiles.imageryClaimMigration.includes("task.lane_name = p_lane_name"), "accelerated shards must claim only their requested evidence lane");
+assert.ok(securityFiles.imageryClaimMigration.includes("for update skip locked"), "accelerated imagery claims must remain concurrency-safe");
+assert.ok(securityFiles.imageryClaimMigration.includes("from public, anon, authenticated"), "lane-specific claims must remain service-role only");
 assert.ok(securityFiles.top500Burst.includes("CRON_SECRET"), "imagery burst endpoints must require Vercel cron authentication");
 assert.ok(securityFiles.top500Burst.includes("limit: 8"), "each daily burst must stay bounded");
+assert.ok(securityFiles.top500Burst.includes('laneName: "imagery"'), "accelerated Hobby bursts must stop after the imagery lane is drained");
 assert.ok(securityFiles.serviceProxy.includes('Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")'), "clean-project proxy must keep the service role inside Supabase");
 assert.ok(securityFiles.serviceProxy.includes("verifyWithAeroLeadAI"), "service-role proxy must verify AeroLeadAI's signed server request");
 assert.ok(securityFiles.serviceProxy.includes('const ALLOWED_PATHS = ["/rest/v1/", "/storage/v1/"]'), "service-role proxy must restrict upstream namespaces");
@@ -209,7 +214,8 @@ const vercel = JSON.parse(read("vercel.json"));
 const leaderboardCron = vercel.crons?.find((entry) => entry.path === "/api/cron/apex-leaderboard");
 assert.equal(leaderboardCron?.schedule, "0 0 * * *", "Lite leaderboard must remain Hobby-safe at once per day");
 const imageryBursts = vercel.crons?.filter((entry) => entry.path.startsWith("/api/cron/top500-burst/")) || [];
-assert.equal(imageryBursts.length, 5, "Hobby-safe imagery backfill must have five bounded daily shards");
+assert.equal(imageryBursts.length, 24, "Hobby-safe imagery backfill must have 24 bounded daily shards");
+assert.equal(new Set(imageryBursts.map((entry) => entry.schedule)).size, 24, "imagery shards must be distributed across distinct daily times");
 assert.ok(vercel.crons.every((entry) => /^\d{1,2} \d{1,2} \* \* \*$/.test(entry.schedule)), "every Hobby cron must run no more than daily");
 
 console.log("AUDIT PASSED: AeroLeadAI Lite Evidence Twin, private access, and compact imagery invariants");
