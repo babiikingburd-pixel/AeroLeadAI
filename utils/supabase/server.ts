@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { resolveSupabaseServerConfig } from "../../lib/supabaseEnvironment";
 
 // SECURITY: this file is server-only. It reads a Supabase secret/service key,
 // which must NEVER be prefixed with NEXT_PUBLIC_ or referenced from any
@@ -8,12 +9,11 @@ import { cookies } from "next/headers";
 // and authorize the caller itself (see lib/auth.ts).
 
 export const createServiceClient = () => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const { url: supabaseUrl, key: serviceRoleKey, configured } = resolveSupabaseServerConfig();
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!configured || !serviceRoleKey) {
     throw new Error(
-      "Missing Supabase server env vars: NEXT_PUBLIC_SUPABASE_URL and/or SUPABASE_SECRET_KEY/SUPABASE_SERVICE_ROLE_KEY"
+      "No clean-project Supabase secret/service-role credential is configured"
     );
   }
 
