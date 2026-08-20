@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const VALID_SHARDS = new Set(["0", "1", "2", "3", "4"]);
+const VALID_SHARDS = new Set(Array.from({ length: 24 }, (_, index) => String(index)));
 
 function authorized(request: NextRequest): boolean {
   const expected = process.env.CRON_SECRET;
@@ -30,6 +30,7 @@ export async function GET(
     },
     body: JSON.stringify({
       mode: "work",
+      laneName: "imagery",
       limit: 8,
       workerId: `hobby-imagery-${params.shard}-${Date.now()}`,
     }),

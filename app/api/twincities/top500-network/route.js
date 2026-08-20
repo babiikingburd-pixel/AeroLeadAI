@@ -344,9 +344,15 @@ export async function POST(req) {
     }
 
     const workerId=String(body.workerId||`top500-${process.pid}-${Date.now()}`);
+    const laneName=body.laneName == null ? null : String(body.laneName);
+    if(laneName&&!LANES.includes(laneName))return Response.json({ok:false,error:"Unknown crawler lane"},{status:400});
     if(mode==="cycle") await rebalance(supabase);
     await supabase.rpc("schedule_due_top500_lanes");
-    const {data:tasks,error}=await supabase.rpc("claim_top500_crawler_tasks",{p_worker_id:workerId,p_limit:Math.min(Number(body.limit)||4,8)});
+    const limit=Math.min(Number(body.limit)||4,8);
+    const claim=laneName
+      ? await supabase.rpc("claim_top500_crawler_tasks_by_lane",{p_worker_id:workerId,p_lane_name:laneName,p_limit:limit})
+      : await supabase.rpc("claim_top500_crawler_tasks",{p_worker_id:workerId,p_limit:limit});
+    const {data:tasks,error}=claim;
     if(error) return Response.json({ok:false,error:error.message},{status:500});
     // A damage task can legitimately spend almost 50 seconds across imagery
     // and vision. Serial execution made two such claims exceed Hobby's 60s
@@ -354,7 +360,7 @@ export async function POST(req) {
     // execute this small bounded batch concurrently.
     const accessHeaders=internalAccessHeaders(req);
     const results=await Promise.all((tasks||[]).map(task=>processTask(supabase,task,new URL(req.url).origin,accessHeaders)));
-    return Response.json({ok:true,version:"APEX14.1",workerId,claimed:tasks?.length||0,results});
+    return Response.json({ok:true,version:"APEX14.1",workerId,laneName:laneName||"mixed",claimed:tasks?.length||0,results});
   } catch(e) {
     return Response.json({ok:false,error:e.message},{status:500});
   }
