@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const VALID_SHARDS = new Set(Array.from({ length: 24 }, (_, index) => String(index)));
+// Sixty-four once-daily paths stay below the Hobby project's 100-cron cap
+// while providing enough bounded claims to drain a 500-property imagery lane
+// in one daily pass. Each invocation remains independently authenticated and
+// SKIP LOCKED prevents overlapping invocations from claiming the same row.
+const VALID_SHARDS = new Set(Array.from({ length: 64 }, (_, index) => String(index)));
 
 function authorized(request: NextRequest): boolean {
   const expected = process.env.CRON_SECRET;

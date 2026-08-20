@@ -3,7 +3,9 @@ import { enrichLeadValue } from "../../../../lib/twincities/propertyValue";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const MAX_LIMIT = 6;
+// One owner-triggered sprint stays under the imagery endpoint's 20/minute
+// guard while making the manual control materially useful for Top 500 fill.
+const MAX_LIMIT = 16;
 const DEFAULT_LIMIT = 4;
 const TOP_POOL = 900;
 const BAND_PLAN = [
