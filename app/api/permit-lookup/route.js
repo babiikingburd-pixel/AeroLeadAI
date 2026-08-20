@@ -8,14 +8,13 @@
 // here permanently, so the second time that address comes up it's an instant,
 // free hit instead of a repeat manual entry.
 
+import { resolveSupabaseServerConfig } from "../../../lib/supabaseEnvironment";
+import { authenticatedSupabaseFetch } from "../../../lib/supabaseServiceProxy";
+
 export const dynamic = "force-dynamic";
 
 function supabaseConfig() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SECRET_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY;
-  return { url, key };
+  return resolveSupabaseServerConfig();
 }
 
 function normalize(address) {
@@ -59,7 +58,7 @@ async function shovelsLookup(address) {
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const address = searchParams.get("address");
-  const { url, key } = supabaseConfig();
+  const { url, configured } = supabaseConfig();
 
   if (!address) return Response.json({ ok: false, notes: "No address provided." });
 
@@ -67,13 +66,13 @@ export async function GET(req) {
   tenYearsAgo.setFullYear(tenYearsAgo.getFullYear() - 10);
 
   let rows = [];
-  let directoryConfigured = !!(url && key);
+  let directoryConfigured = configured;
 
   if (directoryConfigured) {
     try {
       const norm = normalize(address);
       const endpoint = `${url.replace(/\/$/, "")}/rest/v1/permits?address_normalized=eq.${encodeURIComponent(norm)}&select=*&order=updated_at.desc&limit=5`;
-      const res = await fetch(endpoint, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+      const res = await authenticatedSupabaseFetch(endpoint);
       if (!res.ok) throw new Error(`Supabase returned HTTP ${res.status}`);
       rows = await res.json();
     } catch (e) {
@@ -101,9 +100,9 @@ export async function GET(req) {
         if (directoryConfigured) {
           try {
             const endpoint = `${url.replace(/\/$/, "")}/rest/v1/permits`;
-            const cacheRes = await fetch(endpoint, {
+            const cacheRes = await authenticatedSupabaseFetch(endpoint, {
               method: "POST",
-              headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
               // FIX (verified against the live database with a direct
               // insert test): address_normalized is a GENERATED ALWAYS
               // STORED column. Sending an explicit value for it made
@@ -153,25 +152,25 @@ export async function GET(req) {
       ? `Found ${rows.length} record(s).`
       : directoryConfigured
         ? "Not in your directory yet — log it below and it'll be instant next time."
-        : "Permit directory not configured — set NEXT_PUBLIC_SUPABASE_URL and a Supabase key to enable it. Log this one manually for now.",
+        : "The secure permit directory is unavailable. Log this one manually for now.",
   });
 }
 
 export async function POST(req) {
-  const { url, key } = supabaseConfig();
+  const { url, configured } = supabaseConfig();
   const body = await req.json();
   const { address, lat, lon, permitType, permitNumber, issueDate, status, roofRelated, notes, sourceUrl } = body || {};
 
   if (!address) return Response.json({ ok: false, notes: "Address required." }, { status: 400 });
-  if (!url || !key) {
+  if (!configured) {
     return Response.json({ ok: false, notes: "Permit directory not configured — this entry stays local to this property only until Supabase is set up." });
   }
 
   try {
     const endpoint = `${url.replace(/\/$/, "")}/rest/v1/permits`;
-    const res = await fetch(endpoint, {
+    const res = await authenticatedSupabaseFetch(endpoint, {
       method: "POST",
-      headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify([{
         address, lat: lat || null, lng: lon || null,
         permit_type: permitType || null, permit_number: permitNumber || null,

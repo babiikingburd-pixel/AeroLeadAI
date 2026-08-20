@@ -1,8 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseUrl = "https://jxpjxvfhedyroonnwjqm.supabase.co";
+const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4cGp4dmZoZWR5cm9vbm53anFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwNzk4OTQsImV4cCI6MjEwMjY1NTg5NH0.z8tNvnyoa_bzpVoOJaspY6njLAwYt7hNrQRMMqc-uS0";
 
 export const updateSession = async (request: NextRequest) => {
   let supabaseResponse = NextResponse.next({ request: { headers: request.headers } });

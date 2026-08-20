@@ -33,14 +33,8 @@ export const createServiceClient = () => {
 
 // Session-aware client for authenticated user routes (uses anon key + cookies)
 export const createClient = async () => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !anonKey) {
-    throw new Error(
-      "Missing Supabase server env vars: NEXT_PUBLIC_SUPABASE_URL and/or NEXT_PUBLIC_SUPABASE_ANON_KEY"
-    );
-  }
+  const { url: supabaseUrl } = resolveSupabaseServerConfig();
+  const anonKey = AEROLEAD_EDGE_INVOKE_KEY;
 
   const cookieStore = await cookies();
 
