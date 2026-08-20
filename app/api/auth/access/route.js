@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ACCESS_COOKIE, accessConfiguration, accessCookieOptions, constantTimeTextEqual, createAccessToken } from "../../../../lib/security/accessSession";
+import { ACCESS_COOKIE, accessCodeAuthorized, accessConfiguration, accessCookieOptions, createAccessToken } from "../../../../lib/security/accessSession";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,7 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: "JSON request required." }, { status: 415 });
   }
   const { code } = await request.json().catch(() => ({}));
-  if (!constantTimeTextEqual(code, configuration.accessCode)) {
+  if (!await accessCodeAuthorized(code, configuration)) {
     return NextResponse.json({ ok: false, error: "Invalid access code." }, { status: 401 });
   }
 
