@@ -21,69 +21,101 @@
 // `lite: true` skips the Street View sweep (used by high-volume batch/
 // background scanning where only the overhead shot is needed) for speed.
 //
-// Two-layer caching: a fast in-memory cache (lib/serverCache.js, 30 min,
-// per warm serverless instance) checked first, then a persistent Supabase
-// cache (imagery_cache table, 30 days, cross-device/cross-cold-start) when
-// configured. Every genuinely fresh fetch is also appended to an
-// imagery_history log (not overwritten), which is what powers before/after
-// comparison in the console. See supabase_batch_leads_schema.sql for both
-// Supabase tables. Without Supabase configured, that layer is skipped
-// entirely — same as before — but the in-memory cache still applies.
+// Two-layer caching: a fast in-memory cache (30 min) plus compact Supabase
+// manifests (30 days). Image bytes are stored in the private property-images
+// bucket; Postgres keeps only paths, hashes, sizes, source and resolution.
+// History is capped at three snapshots per coordinate so it cannot repeat the
+// old base64-in-Postgres growth failure.
 
 import { cacheGet, cacheSet } from "../../../lib/serverCache";
 import { isValidLatLon } from "../../../lib/validate";
+import { supabaseServer } from "../../../lib/supabaseServer";
+import { persistImageryAngles, removeStoragePaths, signedPathsToDataUrls } from "../../../lib/imagery/privateStorage.mjs";
 export const dynamic = "force-dynamic";
 
 const CACHE_TTL_MS = 30 * 24 * 3600 * 1000; // satellite/street imagery doesn't change often
 const MEM_CACHE_TTL_MS = 30 * 60 * 1000;
-
-function supabaseConfig() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  return url && key ? { url: url.replace(/\/$/, ""), key } : null;
-}
+const CACHE_HISTORY_LIMIT = 3;
 
 function cacheKeyFor(lat, lon) {
   return `${Number(lat).toFixed(5)},${Number(lon).toFixed(5)}`;
 }
 
-async function readCache(cfg, key) {
+async function readCache(supabase, key) {
   try {
-    const res = await fetch(`${cfg.url}/rest/v1/imagery_cache?key=eq.${encodeURIComponent(key)}&select=*&limit=1`, {
-      headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}` },
-    });
-    if (!res.ok) return null;
-    const rows = await res.json();
-    const row = rows[0];
+    const { data: row, error } = await supabase.from("imagery_manifests").select("*").eq("cache_key", key).maybeSingle();
+    if (error || !row) return null;
     if (!row) return null;
     if (Date.now() - new Date(row.fetched_at).getTime() > CACHE_TTL_MS) return null;
-    return row;
+    const angles = await signedPathsToDataUrls(supabase, row.storage_paths || {});
+    if (!Object.keys(angles).length) return null;
+    return { ...row, angles };
   } catch (_) {
     return null;
   }
 }
 
-async function writeCache(cfg, key, lat, lon, payload) {
+async function writeCache(supabase, key, lat, lon, payload, propertyId) {
+  const fetchedAt = new Date().toISOString();
+  const stored = await persistImageryAngles(supabase, {
+    cacheKey: key,
+    propertyId,
+    provider: payload.provider,
+    angles: payload.angles,
+    capturedAt: fetchedAt,
+  });
+  if (!Object.keys(stored.storagePaths).length) return;
+
   const record = {
-    key, lat: Number(lat), lon: Number(lon),
+    cache_key: key,
+    property_id: propertyId ? String(propertyId) : null,
+    lat: Number(lat),
+    lon: Number(lon),
     provider: payload.provider || null,
-    angles: payload.angles, resolution: payload.resolution,
-    fetched_at: new Date().toISOString(),
+    storage_paths: stored.storagePaths,
+    content_hashes: stored.contentHashes,
+    byte_sizes: stored.byteSizes,
+    mime_types: stored.mimeTypes,
+    resolution: payload.resolution || {},
+    sweep: payload.sweep || [],
+    notes: payload.notes || [],
+    fetched_at: fetchedAt,
   };
-  try {
-    await fetch(`${cfg.url}/rest/v1/imagery_cache`, {
-      method: "POST",
-      headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify(record),
-    });
-  } catch (_) {}
-  try {
-    await fetch(`${cfg.url}/rest/v1/imagery_history`, {
-      method: "POST",
-      headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-      body: JSON.stringify([{ key, lat: Number(lat), lon: Number(lon), provider: payload.provider || null, angles: payload.angles, resolution: payload.resolution, fetched_at: record.fetched_at }]),
-    });
-  } catch (_) {}
+  const { error: cacheError } = await supabase.from("imagery_manifests").upsert(record, { onConflict: "cache_key" });
+  if (cacheError) throw cacheError;
+  const { error: historyError } = await supabase.from("imagery_manifest_history").insert(record);
+  if (historyError) throw historyError;
+
+  if (propertyId) {
+    const imageRows = Object.entries(stored.storagePaths).map(([view, storagePath]) => ({
+      property_id: String(propertyId),
+      provider: payload.provider || null,
+      view,
+      image_kind: view.startsWith("vantage") ? "street_view" : "property_overview",
+      storage_path: storagePath,
+      image_url: null,
+      quality_score: payload.provider === "nearmap" ? 95 : payload.provider === "google" ? 90 : payload.provider === "mapbox" ? 84 : 72,
+      evidence_status: "fetched",
+      fetched_at: fetchedAt,
+      content_hash: stored.contentHashes[view] || null,
+      byte_size: stored.byteSizes[view] || null,
+      mime_type: stored.mimeTypes[view] || null,
+    }));
+    const { error: imageError } = await supabase.from("property_images").upsert(imageRows, { onConflict: "property_id,view" });
+    if (imageError) console.warn("[imagery-agent] property image metadata write failed", imageError.message);
+  }
+
+  const { data: historyRows, error: historyReadError } = await supabase
+    .from("imagery_manifest_history")
+    .select("id,storage_paths,fetched_at")
+    .eq("cache_key", key)
+    .order("fetched_at", { ascending: false })
+    .limit(20);
+  if (!historyReadError && (historyRows || []).length > CACHE_HISTORY_LIMIT) {
+    const expired = historyRows.slice(CACHE_HISTORY_LIMIT);
+    await removeStoragePaths(supabase, expired).catch((error) => console.warn("[imagery-agent] history storage cleanup failed", error.message));
+    await supabase.from("imagery_manifest_history").delete().in("id", expired.map((row) => row.id));
+  }
 }
 
 function bearingBetween(lat1, lon1, lat2, lon2) {
@@ -273,7 +305,7 @@ async function tryMapbox(lat, lon, mapboxKey) {
 }
 
 // Provider-side historical archive query (Planet) — distinct from our OWN
-// imagery_history log above: this asks the imagery VENDOR for past dated
+// compact manifest history above: this asks the imagery VENDOR for past dated
 // scenes, which is what makes a true "storm before/after" comparison
 // possible without having already been polling this address for months.
 // Sentinel Hub is documented as a future option but not wired to actual
@@ -315,23 +347,26 @@ export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const lat = searchParams.get("lat"), lon = searchParams.get("lon");
   if (!lat || !lon) return Response.json({ ok: false, error: "lat/lon required" });
-  const supa = supabaseConfig();
-  if (!supa) return Response.json({ ok: false, error: "Imagery history requires Supabase to be configured." });
+  const supabase = supabaseServer();
+  if (!supabase) return Response.json({ ok: false, error: "Imagery history requires the Supabase service role." }, { status: 500 });
   try {
     const key = cacheKeyFor(lat, lon);
-    const res = await fetch(`${supa.url}/rest/v1/imagery_history?key=eq.${encodeURIComponent(key)}&select=fetched_at,provider,angles,resolution&order=fetched_at.desc&limit=20`, {
-      headers: { apikey: supa.key, Authorization: `Bearer ${supa.key}` },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rows = await res.json();
-    return Response.json({ ok: true, snapshots: rows });
+    const { data: rows, error } = await supabase
+      .from("imagery_manifest_history")
+      .select("id,provider,storage_paths,resolution,sweep,notes,fetched_at")
+      .eq("cache_key", key)
+      .order("fetched_at", { ascending: false })
+      .limit(CACHE_HISTORY_LIMIT);
+    if (error) throw error;
+    const snapshots = await Promise.all((rows || []).map(async (row) => ({ ...row, angles: await signedPathsToDataUrls(supabase, row.storage_paths || {}) })));
+    return Response.json({ ok: true, snapshots, retention: CACHE_HISTORY_LIMIT, storage: "private-object-storage" });
   } catch (e) {
     return Response.json({ ok: false, error: e.message });
   }
 }
 
 export async function POST(req) {
-  const { lat, lon, force, lite, historical } = await req.json();
+  const { lat, lon, force, lite, historical, leadId, propertyId } = await req.json();
   if (!isValidLatLon(lat, lon)) return Response.json({ error: "Valid lat/lon required" }, { status: 400 });
 
   const memKey = `img:${(+lat).toFixed(5)},${(+lon).toFixed(5)}:${lite ? "lite" : "full"}`;
@@ -340,11 +375,11 @@ export async function POST(req) {
     if (mem) return Response.json({ ...mem, cached: true, cacheSource: "memory" });
   }
 
-  const supa = supabaseConfig();
+  const supabase = supabaseServer();
   const key = cacheKeyFor(lat, lon);
 
-  if (supa && !force) {
-    const cached = await readCache(supa, key);
+  if (supabase && !force) {
+    const cached = await readCache(supabase, key);
     if (cached) {
       const payload = {
         angles: cached.angles || {}, sweep: [], notes: [`Served from cache (fetched ${cached.fetched_at}).`],
@@ -390,7 +425,14 @@ export async function POST(req) {
     payload.historical = await fetchHistorical(lat, lon, planetKey, sentinelId, sentinelSecret);
   }
 
-  if (supa) await writeCache(supa, key, lat, lon, payload);
+  if (supabase) {
+    try {
+      await writeCache(supabase, key, lat, lon, payload, leadId || propertyId || null);
+    } catch (error) {
+      console.warn("[imagery-agent] compact persistence failed", error.message);
+      payload.notes.push("Imagery was returned, but compact private-storage persistence failed for this request.");
+    }
+  }
   cacheSet(memKey, payload, MEM_CACHE_TTL_MS);
 
   return Response.json(payload);

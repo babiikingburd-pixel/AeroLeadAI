@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/twincities/network-pulse",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 2 * * *"
     },
     {
       "path": "/api/heartbeat",
@@ -31,6 +31,30 @@
     {
       "path": "/api/eagleview/edina-cycle",
       "schedule": "15 11 * * *"
+    },
+    {
+      "path": "/api/cron/top500-burst/0",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/top500-burst/1",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/cron/top500-burst/2",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/top500-burst/3",
+      "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/top500-burst/4",
+      "schedule": "0 22 * * *"
+    },
+    {
+      "path": "/api/cron/apex-leaderboard",
+      "schedule": "0 0 * * *"
     }
   ]
 }

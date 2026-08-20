@@ -1,5 +1,6 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { SUPPORTED_COUNTIES } from "../../../lib/twincities/propertyValue";
+import crypto from "node:crypto";
 export const dynamic = "force-dynamic";
 
 export const maxDuration = 60;
@@ -132,23 +133,20 @@ export async function GET(req) {
         return;
       }
 
-      const { data: urlData } = supabase.storage.from("property-images").getPublicUrl(storagePath);
-      const imageUrl = urlData?.publicUrl ?? null;
-
-      const { error: insertError } = await supabase.from("property_images").insert({
+      const { error: insertError } = await supabase.from("property_images").upsert({
         property_id: row.id,
-        county: row.county,
-        city: row.city,
-        address: row.address,
         provider: img.provider,
         view: "overview_tight",
         storage_path: storagePath,
-        image_url: imageUrl,
+        image_url: null,
         image_kind: "property_overview",
         quality_score: img.quality,
-        evidence_status: imageUrl ? "fetched" : "failed",
+        evidence_status: "fetched",
         fetched_at: new Date().toISOString(),
-      });
+        content_hash: crypto.createHash("sha256").update(img.buffer).digest("hex"),
+        byte_size: img.buffer.length,
+        mime_type: img.contentType,
+      }, { onConflict: "property_id,view" });
 
       if (insertError) {
         console.error("[image-crawler] DB image record failed", row.id, insertError.message);

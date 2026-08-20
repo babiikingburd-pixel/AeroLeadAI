@@ -5,6 +5,15 @@ export const maxDuration = 60;
 
 const TC_COUNTIES = ["hennepin","ramsey","dakota","scott","carver","anoka"];
 const LANES = ["residential","permits","storm","imagery","damage","development","competition"];
+const LANE_NEXT_SECONDS = {
+  residential: 7 * 86400,
+  permits: 30 * 86400,
+  storm: 7 * 86400,
+  imagery: 30 * 86400,
+  damage: 30 * 86400,
+  development: 30 * 86400,
+  competition: 86400,
+};
 
 function auth(req) {
   const secret = process.env.CRON_SECRET;
@@ -56,7 +65,7 @@ async function writeFinding(supabase, task, source, claim, evidence, confidence,
 
 async function finishTask(supabase, task, patch) {
   await supabase.from("top500_crawler_tasks").update({
-    status: patch.status || "complete",
+    status: patch.status || "completed",
     finished_at: new Date().toISOString(),
     result: patch.result || {},
     evidence_written: patch.evidence_written || 0,
@@ -146,7 +155,9 @@ async function processTask(supabase, task, origin) {
       if (row.lat == null || row.lon == null) throw new Error("Missing coordinates");
       const r = await fetch(`${origin}/api/imagery-agent`, {
         method:"POST", headers:{"content-type":"application/json"},
-        body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:false,force:true}),
+        // The daily Hobby worker needs the two overhead roof views first.
+        // Street-view sweeps are slower and damage has its own review lane.
+        body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:true,force:false}),
         signal:AbortSignal.timeout(18000),
       });
       const data = await r.json().catch(()=>({}));
@@ -221,9 +232,12 @@ async function processTask(supabase, task, origin) {
       result = {rank, cutoff:Number(challenger?.priority_score || 0), challenged:beat};
     }
 
-    const nextSeconds = task.lane_name === "damage" ? 3600 : task.lane_name === "permits" ? 1800 : 900;
+    // Evidence that changes monthly should not be re-fetched every 15 minutes.
+    // Matching these windows to source freshness prevents paid/free provider
+    // churn and bounds terminal task history between retention passes.
+    const nextSeconds = LANE_NEXT_SECONDS[task.lane_name] || 7 * 86400;
     const next = new Date(Date.now()+nextSeconds*1000).toISOString();
-    await finishTask(supabase,task,{status:"complete",evidence_written:evidenceWritten,result,next_run_at:next});
+    await finishTask(supabase,task,{status:"completed",evidence_written:evidenceWritten,result,next_run_at:next});
     await supabase.from("batch_leads").update({top500_last_investigated_at:new Date().toISOString(),top500_next_investigation_at:next}).eq("id",row.id);
     return {ok:true,lane:task.lane_name,result,evidenceWritten};
   } catch(e) {
@@ -234,6 +248,29 @@ async function processTask(supabase, task, origin) {
 }
 
 async function rebalance(supabase) {
+  // Once the canonical Lite score table is present, it owns slot ordering.
+  // The legacy network pulse must not replace that ranking with the older
+  // priority_score order a few hours after the leaderboard cron runs.
+  const { count: liteCount, error: liteCountError } = await supabase
+    .from("aerolead_property_scores")
+    .select("property_id", { count: "exact", head: true })
+    .lte("lite_rank", 500);
+  if (!liteCountError && Number(liteCount) > 0) {
+    const { data: sync, error: syncError } = await supabase.rpc("lite_sync_top500_slots");
+    if (syncError) throw new Error(syncError.message);
+    const { data: staleTasksCancelled, error: reconcileError } = await supabase.rpc("lite_cancel_stale_top500_tasks");
+    if (reconcileError) throw new Error(reconcileError.message);
+    return {
+      rankingEngine: "lite_evidence_twin",
+      assigned: Number(sync?.occupied) || Number(liteCount),
+      replaced: 0,
+      opened: Math.max(0, 500 - (Number(sync?.occupied) || 0)),
+      candidates: Number(liteCount),
+      tasksEnsured: Number(sync?.tasks_generated) || 0,
+      staleTasksCancelled: Number(staleTasksCancelled) || 0,
+    };
+  }
+
   // First, determine residential candidates from persisted positive evidence.
   // Unknown properties remain in the background pool and cannot be delivered
   // to residential contractors.
@@ -282,7 +319,7 @@ async function rebalance(supabase) {
     assigned++;
   }
   const {data:ensure} = await supabase.rpc("ensure_top500_crawler_tasks");
-  return {assigned,replaced,opened,candidates:candidates?.length||0,tasksEnsured:Number(ensure||0)};
+  return {rankingEngine:"legacy_priority_fallback",assigned,replaced,opened,candidates:candidates?.length||0,tasksEnsured:Number(ensure||0)};
 }
 
 export async function POST(req) {
@@ -302,8 +339,11 @@ export async function POST(req) {
     await supabase.rpc("schedule_due_top500_lanes");
     const {data:tasks,error}=await supabase.rpc("claim_top500_crawler_tasks",{p_worker_id:workerId,p_limit:Math.min(Number(body.limit)||4,8)});
     if(error) return Response.json({ok:false,error:error.message},{status:500});
-    const results=[];
-    for(const task of tasks||[]) results.push(await processTask(supabase,task,new URL(req.url).origin));
+    // A damage task can legitimately spend almost 50 seconds across imagery
+    // and vision. Serial execution made two such claims exceed Hobby's 60s
+    // function ceiling. SKIP LOCKED already isolates the claimed tasks, so
+    // execute this small bounded batch concurrently.
+    const results=await Promise.all((tasks||[]).map(task=>processTask(supabase,task,new URL(req.url).origin)));
     return Response.json({ok:true,version:"APEX14.1",workerId,claimed:tasks?.length||0,results});
   } catch(e) {
     return Response.json({ok:false,error:e.message},{status:500});

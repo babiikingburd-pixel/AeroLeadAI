@@ -1,66 +1,66 @@
-import { saveLeadToDB } from "../../../../lib/supabase";
-export const dynamic = "force-dynamic";
+import { rankEvidenceTwins } from "../../../../lib/lite/evidenceTwin.mjs";
+import { supabaseServer } from "../../../../lib/supabaseServer";
 
+export const dynamic = "force-dynamic";
 export const maxDuration = 45;
 
-const BATCH_PACE_MS = 2500; // free-tier rate limit protection between batches
-
-async function callClaude(zipCode, count) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured.");
-
-  const prompt = `Generate ${count} realistic but fictional residential lead records for roofing/exterior sales prospecting in ZIP code ${zipCode}. Return ONLY a JSON array, no prose, of objects with this exact shape:
-[{"address": "123 Main St, City, ST 00000", "city": "City", "zip": "${zipCode}", "roof_score": 0-100, "drive_score": 0-100, "landscape_score": 0-100, "urgency": "low|medium|high", "est_value": "$X,XXX", "damage_notes": "short note", "home_age": 1-80, "sqft": 800-6000, "lat": 0.0, "lng": 0.0}]`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2000,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Anthropic API error ${res.status}: ${text}`);
-  }
-
-  const data = await res.json();
-  const text = data.content?.[0]?.text ?? "[]";
-  const jsonMatch = text.match(/\[[\s\S]*\]/);
-  return JSON.parse(jsonMatch ? jsonMatch[0] : text);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const MAX_RESULTS = 50;
+const MINNESOTA_ZIP = /^(55|56)\d{3}$/;
 
 export async function POST(req) {
   try {
     const body = await req.json();
-    const zipCode = (body.zipCode || "").trim();
-    const batchSize = Math.min(Math.max(parseInt(body.batchSize, 10) || 4, 1), 10);
+    const zipCode = String(body.zipCode || "").trim();
+    const batchSize = Math.min(Math.max(Number.parseInt(body.batchSize, 10) || 10, 1), MAX_RESULTS);
 
-    if (!zipCode) {
-      return Response.json({ success: false, error: "zipCode is required." }, { status: 400 });
+    if (!MINNESOTA_ZIP.test(zipCode)) {
+      return Response.json({ success: false, error: "A valid Minnesota ZIP code is required." }, { status: 400 });
     }
 
-    const generated = await callClaude(zipCode, batchSize);
-
-    const saved = [];
-    for (const lead of generated) {
-      saved.push(await saveLeadToDB(lead));
-      await sleep(BATCH_PACE_MS);
+    const supabase = supabaseServer();
+    if (!supabase) {
+      return Response.json({ success: false, error: "Supabase service role is not configured." }, { status: 500 });
     }
 
-    return Response.json({ success: true, leads: saved, scannedAt: new Date().toISOString() });
-  } catch (e) {
-    return Response.json({ success: false, error: e.message }, { status: 500 });
+    const { data, error } = await supabase
+      .from("batch_leads")
+      .select("*")
+      .eq("zip", zipCode)
+      .order("priority_score", { ascending: false, nullsFirst: false })
+      .limit(Math.min(500, batchSize * 10));
+
+    if (error) {
+      return Response.json({ success: false, error: `Property-index scan failed: ${error.message}` }, { status: 500 });
+    }
+
+    // The old route asked an LLM to invent "realistic" addresses, which can
+    // contaminate a lead database. Lite scans only genuine property-index
+    // rows and applies the same Minnesota/residential Evidence Twin gate as
+    // the daily Top-500 refresh.
+    const ranked = rankEvidenceTwins(data || []).slice(0, batchSize);
+    const leads = ranked.map((row) => ({
+      ...row,
+      priority_score: row.evidenceTwin.rankScore,
+      opportunity_score: row.evidenceTwin.opportunityScore,
+      evidence_confidence: row.evidenceTwin.evidenceConfidence,
+      contractor_value_score: row.evidenceTwin.contractorValueScore,
+      score_status: row.evidenceTwin.scoreStatus,
+      classification: row.evidenceTwin.classification,
+    }));
+
+    return Response.json({
+      success: true,
+      synthetic: false,
+      source: "secure_minnesota_property_index",
+      zipCode,
+      scanned: data?.length || 0,
+      leads,
+      scannedAt: new Date().toISOString(),
+      note: leads.length
+        ? "Real indexed properties ranked with the Lite Evidence Twin."
+        : "No eligible indexed properties are loaded for this ZIP yet; no synthetic leads were created.",
+    });
+  } catch (error) {
+    return Response.json({ success: false, error: error.message }, { status: 500 });
   }
 }

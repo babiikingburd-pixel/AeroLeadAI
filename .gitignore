@@ -23,3 +23,4 @@ zipFile.zip
 __pycache__/
 *.pyc
 .pytest_cache/
+supabase/.temp/

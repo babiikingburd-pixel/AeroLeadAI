@@ -22,7 +22,7 @@
 // what "better" means for a given metric. Every insight row this writes
 // says exactly which of these it did, not more.
 
-import { supabaseGet, supabasePost } from "../../../lib/supabaseRest";
+import { supabaseGet, supabasePatch, supabasePost } from "../../../lib/supabaseRest";
 import { withCrawlerLog } from "../../../lib/crawlerLog";
 import { planCycle } from "../../../lib/planner";
 export const dynamic = "force-dynamic";
@@ -83,19 +83,12 @@ async function resolvePredictions() {
     const errors = [];
     for (const c of unresolvedRes.data) {
       if (!c.prediction_id || c.predictions?.actual_score !== null) continue; // already resolved
-      const patchRes = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/predictions?prediction_id=eq.${c.prediction_id}`,
-        {
-          method: "PATCH",
-          headers: {
-            apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}`,
-            "Content-Type": "application/json", Prefer: "return=minimal",
-          },
-          body: JSON.stringify({ actual_score: c.corrected_score, outcome_source: "manual_correction", outcome_recorded_at: new Date().toISOString() }),
-        }
-      );
-      if (patchRes.ok) succeeded++; else { failed++; errors.push(`prediction ${c.prediction_id}: HTTP ${patchRes.status}`); }
+      const patchRes = await supabasePatch(`predictions?prediction_id=eq.${c.prediction_id}`, {
+        actual_score: c.corrected_score,
+        outcome_source: "manual_correction",
+        outcome_recorded_at: new Date().toISOString(),
+      });
+      if (patchRes.ok) succeeded++; else { failed++; errors.push(`prediction ${c.prediction_id}: ${patchRes.error || "update failed"}`); }
     }
     return { succeeded, failed, errors };
   });
