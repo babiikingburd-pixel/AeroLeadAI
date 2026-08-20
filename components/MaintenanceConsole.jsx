@@ -6,17 +6,11 @@ import ImageReviewQueue from "./ImageReviewQueue";
 const SLATE = "#0d1420", PANEL = "#131c2b", LINE = "#22304a", TEXT = "#dfe6ee", MUTE = "#77839a";
 const AMBER = "#f5b942", BLUE = "#4fa3e3", GREEN = "#4fc98e", RED = "#ef5a6f";
 
-const PASSCODE = "AERO2026";
-
 function nowStamp() {
   return new Date().toLocaleTimeString();
 }
 
 export default function MaintenanceConsole() {
-  const [unlocked, setUnlocked] = useState(false);
-  const [code, setCode] = useState("");
-  const [error, setError] = useState("");
-
   const [log, setLog] = useState([]);
 
   const [zip, setZip] = useState("");
@@ -40,20 +34,11 @@ export default function MaintenanceConsole() {
     setLog((l) => [{ id: Math.random().toString(36).slice(2), at: nowStamp(), entry }, ...l].slice(0, 30));
   }
 
-  function tryUnlock() {
-    if (code.trim().toUpperCase() === PASSCODE) {
-      setUnlocked(true);
-      setError("");
-    } else {
-      setError("Incorrect passcode.");
-    }
-  }
-
   async function runContinuousScan() {
     if (!zip.trim()) return;
     setScanBusy(true);
     setScanResult(null);
-    pushLog(`Continuous scan started — ZIP ${zip}, batch ${batchSize}`);
+    pushLog(`Real-property scan started — ZIP ${zip}, batch ${batchSize}`);
     try {
       const res = await fetch("/api/scan/continuous", {
         method: "POST",
@@ -62,7 +47,7 @@ export default function MaintenanceConsole() {
       });
       const data = await res.json();
       setScanResult(data);
-      pushLog(data.success ? `Continuous scan complete — ${data.leads?.length ?? 0} lead(s) saved` : `Continuous scan failed: ${data.error}`);
+      pushLog(data.success ? `Real-property scan complete — ${data.leads?.length ?? 0} eligible lead(s) ranked` : `Property scan failed: ${data.error}`);
     } catch (e) {
       setScanResult({ success: false, error: e.message });
       pushLog(`Continuous scan errored: ${e.message}`);
@@ -115,27 +100,6 @@ export default function MaintenanceConsole() {
   const inputStyle = { background: SLATE, border: `1px solid ${LINE}`, borderRadius: 6, color: TEXT, padding: "8px 10px", fontSize: 13 };
   const btnStyle = (color) => ({ padding: "8px 14px", background: "transparent", border: `1px solid ${color}`, borderRadius: 6, color, cursor: "pointer", fontSize: 13 });
 
-  if (!unlocked) {
-    return (
-      <div style={{ minHeight: "60vh", background: SLATE, color: TEXT, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Inter, system-ui, sans-serif" }}>
-        <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 32, width: 320, textAlign: "center" }}>
-          <div style={{ fontSize: 11, letterSpacing: 2, color: AMBER, fontFamily: "monospace", marginBottom: 10 }}>RESTRICTED</div>
-          <h2 style={{ fontSize: 18, margin: "0 0 16px" }}>🔧 Maintenance Console</h2>
-          <input
-            type="password"
-            placeholder="Passcode"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && tryUnlock()}
-            style={{ ...inputStyle, width: "100%", marginBottom: 10, boxSizing: "border-box" }}
-          />
-          {error && <div style={{ color: RED, fontSize: 12, marginBottom: 10 }}>{error}</div>}
-          <button onClick={tryUnlock} style={{ ...btnStyle(GREEN), width: "100%" }}>Unlock</button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={{ minHeight: "100vh", background: SLATE, color: TEXT, fontFamily: "Inter, system-ui, sans-serif", padding: "24px 28px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: `1px solid ${LINE}`, paddingBottom: 14, marginBottom: 18 }}>
@@ -166,7 +130,7 @@ export default function MaintenanceConsole() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: 16 }}>
-          <div style={{ fontSize: 11, color: AMBER, fontFamily: "monospace", marginBottom: 10 }}>CONTINUOUS SCAN</div>
+          <div style={{ fontSize: 11, color: AMBER, fontFamily: "monospace", marginBottom: 10 }}>REAL PROPERTY SCAN</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <input style={{ ...inputStyle, flex: 1, minWidth: 100 }} placeholder="ZIP code" value={zip} onChange={(e) => setZip(e.target.value)} />
             <input style={{ ...inputStyle, width: 90 }} type="number" min={1} max={10} value={batchSize} onChange={(e) => setBatchSize(e.target.value)} />
@@ -174,7 +138,7 @@ export default function MaintenanceConsole() {
           </div>
           {scanResult && (
             <div style={{ fontSize: 12, color: scanResult.success ? GREEN : RED }}>
-              {scanResult.success ? `${scanResult.leads?.length ?? 0} lead(s) saved at ${scanResult.scannedAt}` : scanResult.error}
+              {scanResult.success ? `${scanResult.leads?.length ?? 0} eligible lead(s) ranked at ${scanResult.scannedAt}${scanResult.note ? ` — ${scanResult.note}` : ""}` : scanResult.error}
             </div>
           )}
         </div>

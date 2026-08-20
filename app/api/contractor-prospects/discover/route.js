@@ -8,7 +8,7 @@
 // or a count/list pulled from batch_leads; nothing here invents an address,
 // a review, a license status, or a precision the underlying data doesn't
 // support.
-import { supabaseAdmin, isSupabaseConfigured } from "../../../../lib/supabase";
+import { supabaseServer } from "../../../../lib/supabaseServer";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
@@ -62,7 +62,8 @@ async function tryFindBusiness(businessName, locationHint) {
 }
 
 export async function POST(req) {
-  if (!isSupabaseConfigured || !supabaseAdmin) {
+  const supabase = supabaseServer();
+  if (!supabase) {
     return Response.json({ ok: false, error: "Supabase not configured." }, { status: 500 });
   }
 
@@ -91,7 +92,7 @@ export async function POST(req) {
   // two-step pattern used elsewhere in this codebase for radius queries.
   const latDelta = RADIUS_MILES / 69; // ~69 miles per degree latitude
   const lonDelta = RADIUS_MILES / (69 * Math.cos((geo.lat * Math.PI) / 180));
-  const { data: nearby, error: nearbyErr } = await supabaseAdmin
+  const { data: nearby, error: nearbyErr } = await supabase
     .from("batch_leads")
     .select("city, lat, lon")
     .gte("lat", geo.lat - latDelta).lte("lat", geo.lat + latDelta)
@@ -146,7 +147,7 @@ export async function POST(req) {
     verification_notes: `Auto-discovered via contractor deep-search intake. Location: ${geo.matched} (${geo.provider}). Service area is ${serviceAreaCities.length} real cities from properties in the database within ${RADIUS_MILES} miles — not a fabricated list. Business location itself was ${businessMatch.found ? "found" : "not found"} in public map data; if not found, this is anchored to the location you entered instead.`,
   };
 
-  const { data: inserted, error: insertErr } = await supabaseAdmin
+  const { data: inserted, error: insertErr } = await supabase
     .from("contractor_candidates")
     .insert([record])
     .select()

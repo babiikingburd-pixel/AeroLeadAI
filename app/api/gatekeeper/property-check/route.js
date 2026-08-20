@@ -1,5 +1,5 @@
 import { getLeadById } from "../../../../lib/v22max/dataSource";
-import { supabaseAdmin, supabase } from "../../../../lib/supabase";
+import { supabaseServer } from "../../../../lib/supabaseServer";
 import { evaluateLead, APEX16_VERSION } from "../../../../lib/gatekeeper16";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export async function GET(req) {
   if (!row) return Response.json({ success: false, error: "property not found", dataMode }, { status: 404 });
 
   let images = [];
-  const client = supabaseAdmin || supabase;
+  const client = supabaseServer();
   if (client) {
     const { data } = await client
       .from("property_images")

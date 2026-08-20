@@ -17,7 +17,7 @@
 // not something to silently pick for you. The permits worker is real
 // because you already have a vendor (Shovels) wired for it.
 
-import { supabaseGet, supabasePost } from "../../../../../lib/supabaseRest";
+import { supabaseGet, supabasePatch, supabasePost } from "../../../../../lib/supabaseRest";
 import { findOrCreateProperty } from "../../../../../lib/properties";
 import { addTimelineEvent } from "../../../../../lib/timeline";
 import { recordChange } from "../../../../../lib/changeDetector";
@@ -32,15 +32,13 @@ async function startRun(workerName) {
 
 async function finishRun(runId, { status, recordsFound = 0, recordsNew = 0, detail }) {
   if (!runId) return;
-  await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "")}/rest/v1/crawler_runs?run_id=eq.${runId}`, {
-    method: "PATCH",
-    headers: {
-      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ status, records_found: recordsFound, records_new: recordsNew, detail, finished_at: new Date().toISOString() }),
-  }).catch(() => {});
+  await supabasePatch(`crawler_runs?run_id=eq.${runId}`, {
+    status,
+    records_found: recordsFound,
+    records_new: recordsNew,
+    detail,
+    finished_at: new Date().toISOString(),
+  });
 }
 
 // --- permits worker: real, reuses PERMIT_API_KEY (Shovels) already used by

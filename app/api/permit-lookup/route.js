@@ -1,8 +1,7 @@
 // Backs onto the same `permits` table described in supabase_permits_schema.sql
-// (shipped at the project root). Uses SUPABASE_SERVICE_ROLE_KEY when present
-// (server-side, not exposed to the browser) and falls back to the public
-// NEXT_PUBLIC_SUPABASE_ANON_KEY if that's all that's configured — works either
-// way as long as the RLS policies from the schema file are in place.
+// (shipped at the project root). Database reads and writes require the
+// server-only Supabase secret/service-role key; public-key fallback is
+// deliberately disabled because the AeroLeadAI tables are owner-only.
 //
 // This does NOT replace a real county-permit connector — it's the "your own
 // directory" pattern: every address you (or the app) ever look up gets saved
@@ -14,11 +13,8 @@ export const dynamic = "force-dynamic";
 function supabaseConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_SECRET_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
   return { url, key };
 }
 

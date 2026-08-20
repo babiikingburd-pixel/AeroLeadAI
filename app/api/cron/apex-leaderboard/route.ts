@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
+import { refreshLiteLeaderboard } from "@/lib/lite/scoreRefresh.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -39,35 +40,37 @@ export async function GET(request: NextRequest) {
   const cycleId = buildCycleId();
 
   try {
-    // The checked-in SQL function defaults to 500 and 2 only when arguments
-    // are omitted. Supabase RPC sends named arguments, so pass the values
-    // explicitly; sending null would disable the qualification comparisons.
     const supabase = createServiceClient();
-    const { data, error } = await supabase.rpc("apex10_rebuild_leaderboard", {
-      p_cycle_id: cycleId,
-      p_limit: LEADERBOARD_LIMIT,
-      p_stability_cycles: STABILITY_CYCLES
-    });
+    let data;
+    let engine = "lite_evidence_twin";
+
+    try {
+      // The V23 GateKeeper control-plane ideas now run before slot assignment:
+      // contradiction-first evidence, independent sources, reproducibility,
+      // and opportunity/confidence/value kept as separate scores.
+      data = await refreshLiteLeaderboard(supabase, { scanLimit: 1500 });
+    } catch (liteError) {
+      // Safe rollout path for a deployment that lands moments before its
+      // matching migration. The legacy function remains service-role-only and
+      // keeps the Top 500 alive; the response clearly reports the fallback.
+      console.warn("Lite evidence-twin refresh unavailable; using APEX10 fallback", {
+        cycleId,
+        error: liteError instanceof Error ? liteError.message : String(liteError)
+      });
+      engine = "apex10_rebuild_leaderboard_fallback";
+      const fallback = await supabase.rpc("apex10_rebuild_leaderboard", {
+        p_cycle_id: cycleId,
+        p_limit: LEADERBOARD_LIMIT,
+        p_stability_cycles: STABILITY_CYCLES
+      });
+      if (fallback.error) throw fallback.error;
+      data = {
+        fallback: fallback.data,
+        lite_error: liteError instanceof Error ? liteError.message : String(liteError)
+      };
+    }
 
     const durationMs = Date.now() - started;
-
-    if (error) {
-      console.error("APEX leaderboard cron failed", {
-        cycleId,
-        error,
-        durationMs
-      });
-
-      return NextResponse.json(
-        {
-          ok: false,
-          cycle_id: cycleId,
-          error: error.message,
-          duration_ms: durationMs
-        },
-        { status: 500 }
-      );
-    }
 
     console.log("APEX leaderboard cron completed", {
       cycleId,
@@ -77,7 +80,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      engine: "apex10_rebuild_leaderboard",
+      engine,
       cycle_id: cycleId,
       duration_ms: durationMs,
       result: data

@@ -1,5 +1,7 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { TC_COUNTIES, FAST_SCORE_FIELDS, scoreRow } from "../../../lib/twincities/fastCycle";
+import { rankEvidenceTwins, EVIDENCE_TWIN_VERSION } from "../../../lib/lite/evidenceTwin.mjs";
+import { signImageRows } from "../../../lib/imagery/privateStorage.mjs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -33,13 +35,16 @@ function rankRows(rows){
   for(const raw of rows||[]){
     if(!residentialEnough(raw))continue;
     const scored=scoreRow(raw);
-    const score=Number(scored.priorityScore??raw.priority_score??0),confidence=Number(scored.confidenceScore??raw.confidence_score??0);
-    if(!scored.entered&&score<=0)continue;
-    const row={...raw,...scored,priorityScore:score,confidenceScore:confidence,singleFamilySignal:singleFamilySignal(raw)};
+    const legacyPriorityScore=Number(scored.priorityScore??raw.priority_score??0);
+    const row={...raw,...scored,legacyPriorityScore,singleFamilySignal:singleFamilySignal(raw)};
     const key=addressKey(row)||String(row.id),prior=best.get(key);
-    if(!prior||score>prior.priorityScore||(score===prior.priorityScore&&confidence>prior.confidenceScore))best.set(key,row);
+    if(!prior||legacyPriorityScore>prior.legacyPriorityScore)best.set(key,row);
   }
-  return [...best.values()].sort((a,b)=>b.singleFamilySignal-a.singleFamilySignal||b.priorityScore-a.priorityScore||b.confidenceScore-a.confidenceScore);
+  return rankEvidenceTwins([...best.values()]).map((row)=>({
+    ...row,
+    priorityScore:Number(row.evidenceTwin.rankScore||0),
+    confidenceScore:Number(row.evidenceTwin.evidenceConfidence||0),
+  }));
 }
 
 async function fetchCandidateRows(supabase){
@@ -72,19 +77,24 @@ export async function GET(req){
   const {searchParams}=new URL(req.url);const requested=searchParams.get("tier");const tier=TIER_CAPS[requested]?requested:"review";const limit=Math.min(Number(searchParams.get("limit"))||TIER_CAPS[tier],TIER_CAPS[tier]);
   let rows=[],partialErrors=[];try{({rows,partialErrors}=await fetchCandidateRows(supabase))}catch(error){return Response.json({ok:false,error:error.message,leads:[],total:0},{status:500})}
   const ranked=rankRows(rows);
-  let pool=tier==="contractor"?ranked.filter(r=>r.review_status==="approved"):ranked;
+  let pool=tier==="contractor"?ranked.filter(r=>r.review_status==="approved"&&r.evidenceTwin?.scoreStatus==="CERTIFIED"&&r.liteTier==="TOP20"):ranked;
   if(tier==="candidates")pool=pool.slice(0,500);if(tier==="review")pool=pool.slice(0,100);
   const currentYear=new Date().getFullYear();
   const top=pool.slice(0,limit).map((r,i)=>{
     const permit=permitSummary(r);
     const yearBuilt=Number(r.year_built)||null;
     return {
-      id:r.id,rank:i+1,address:r.address,city:r.city,county:r.county,lat:r.lat,lon:r.lon,
+      id:r.id,rank:r.liteRank||i+1,address:r.address,city:r.city,county:r.county,lat:r.lat,lon:r.lon,
       propertyClass:r.property_class||null,singleFamilySignal:r.singleFamilySignal||0,
       yearBuilt,propertyAgeYears:yearBuilt?Math.max(0,currentYear-yearBuilt):null,
       assessedValue:r.assessed_value,permit,
       evidenceScore:Number(r.evidenceScore??r.evidence_score??0),confidenceScore:Number(r.confidenceScore??r.confidence_score??0),priorityScore:Number(r.priorityScore??r.priority_score??0),
-      humanReview:tier==="review"?true:!!r.humanReview,reviewStatus:r.review_status||"pending",categories:r.categories||[],breakdown:r.breakdown||{},reasons:r.reasons||[],tier:r.tier,
+      legacyPriorityScore:Number(r.legacyPriorityScore??r.priority_score??0),
+      scoringVersion:r.evidenceTwin?.version||EVIDENCE_TWIN_VERSION,
+      opportunityScore:r.evidenceTwin?.opportunityScore??0,evidenceConfidence:r.evidenceTwin?.evidenceConfidence??0,contractorValueScore:r.evidenceTwin?.contractorValueScore??0,
+      scoreStatus:r.evidenceTwin?.scoreStatus||"PROVISIONAL",gatekeeperClassification:r.evidenceTwin?.classification||"HOLD-FOR-VERIFICATION",
+      scoreBreakdown:r.evidenceTwin?.breakdown||{},evidenceSummary:r.evidenceTwin?.evidenceSummary||{},nextEvidencePlan:r.evidenceTwin?.evidencePlan||[],
+      humanReview:tier==="review"?true:!!r.humanReview,reviewStatus:r.review_status||"pending",categories:r.categories||[],breakdown:r.breakdown||{},reasons:r.reasons||[],tier:r.liteTier,selectionTrack:r.selectionTrack,
       sourceStatus:r.sourceStatus||{},validationStatus:r.validation_status||"unvalidated",validationScore:r.validation_score??0,validationConfidence:r.validation_confidence??0,lastValidatedAt:r.last_validated_at,scoredAt:r.scored_at,
       imageUrl:null,imageIsFallback:false,
       googleMapsUrl:`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${r.address||""}, ${r.city||""}, MN`)}`,
@@ -94,12 +104,13 @@ export async function GET(req){
   try{
     const ids=top.map(r=>r.id).filter(Boolean);
     if(ids.length){
-      const {data:images}=await supabase.from("property_images").select("property_id,image_url,enhanced_image_url,original_image_url,fetched_at").in("property_id",ids).order("fetched_at",{ascending:false});
+      const {data:rawImages}=await supabase.from("property_images").select("property_id,image_url,enhanced_image_url,original_image_url,storage_path,provider,view,fetched_at").in("property_id",ids).order("fetched_at",{ascending:false});
+      const images=await signImageRows(supabase,rawImages||[],900);
       const byId=new Map();
-      for(const img of images||[])if(!byId.has(String(img.property_id)))byId.set(String(img.property_id),img.enhanced_image_url||img.image_url||img.original_image_url||null);
+      for(const img of images||[])if(!byId.has(String(img.property_id)))byId.set(String(img.property_id),img.signed_url||img.enhanced_image_url||img.image_url||img.original_image_url||null);
       for(const lead of top){const cached=byId.get(String(lead.id));if(cached){lead.imageUrl=cached;lead.imageIsFallback=false;lead.sourceStatus={...lead.sourceStatus,imagery:true}}}
     }
   }catch(e){console.warn(`[top-leads] image lookup failed: ${e.message}`)}
   for(const lead of top)if(!lead.imageUrl&&lead.lat!=null&&lead.lon!=null){lead.imageUrl=freeSatelliteFallback(Number(lead.lat),Number(lead.lon));lead.imageIsFallback=true}
-  return Response.json({ok:true,tier,cap:TIER_CAPS[tier],leads:top,total:top.length,scanned:rows.length,entered:ranked.length,top100Count:Math.min(100,ranked.length),top500Count:Math.min(500,ranked.length),liveScored:true,deduped:true,residentialFiltered:true,singleFamilyPrioritized:true,scanPages:MAX_SCAN_PAGES,partialErrors});
+  return Response.json({ok:true,tier,cap:TIER_CAPS[tier],leads:top,total:top.length,scanned:rows.length,entered:ranked.length,top100Count:Math.min(100,ranked.length),top500Count:Math.min(500,ranked.length),liveScored:true,scoringVersion:EVIDENCE_TWIN_VERSION,deduped:true,residentialFiltered:true,singleFamilyPrioritized:true,scanPages:MAX_SCAN_PAGES,partialErrors});
 }

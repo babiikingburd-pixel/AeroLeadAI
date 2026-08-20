@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-// SECURITY: this file is server-only. It reads SUPABASE_SERVICE_ROLE_KEY,
+// SECURITY: this file is server-only. It reads a Supabase secret/service key,
 // which must NEVER be prefixed with NEXT_PUBLIC_ or referenced from any
 // file under app/**/page.tsx client components. RLS is bypassed by the
 // service role — every write path using this client must validate input
@@ -9,11 +9,11 @@ import { cookies } from "next/headers";
 
 export const createServiceClient = () => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
-      "Missing Supabase server env vars: NEXT_PUBLIC_SUPABASE_URL and/or SUPABASE_SERVICE_ROLE_KEY"
+      "Missing Supabase server env vars: NEXT_PUBLIC_SUPABASE_URL and/or SUPABASE_SECRET_KEY/SUPABASE_SERVICE_ROLE_KEY"
     );
   }
 

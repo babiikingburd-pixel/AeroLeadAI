@@ -1,9 +1,13 @@
-import { supabaseAdmin, supabase } from "../../../../lib/supabase";
+import { supabaseServer } from "../../../../lib/supabaseServer";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const client = () => supabaseAdmin || supabase;
+const client = () => {
+  const value = supabaseServer();
+  if (!value) throw new Error("Supabase service role is not configured.");
+  return value;
+};
 const clamp = (n,min,max)=>Math.max(min,Math.min(max,n));
 
 function windowFrom(row={}) {
