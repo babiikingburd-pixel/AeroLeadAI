@@ -5,6 +5,15 @@ export const maxDuration = 60;
 
 const TC_COUNTIES = ["hennepin","ramsey","dakota","scott","carver","anoka"];
 const LANES = ["residential","permits","storm","imagery","damage","development","competition"];
+const LANE_NEXT_SECONDS = {
+  residential: 7 * 86400,
+  permits: 30 * 86400,
+  storm: 7 * 86400,
+  imagery: 30 * 86400,
+  damage: 30 * 86400,
+  development: 30 * 86400,
+  competition: 86400,
+};
 
 function auth(req) {
   const secret = process.env.CRON_SECRET;
@@ -223,7 +232,10 @@ async function processTask(supabase, task, origin) {
       result = {rank, cutoff:Number(challenger?.priority_score || 0), challenged:beat};
     }
 
-    const nextSeconds = task.lane_name === "damage" ? 3600 : task.lane_name === "permits" ? 1800 : 900;
+    // Evidence that changes monthly should not be re-fetched every 15 minutes.
+    // Matching these windows to source freshness prevents paid/free provider
+    // churn and bounds terminal task history between retention passes.
+    const nextSeconds = LANE_NEXT_SECONDS[task.lane_name] || 7 * 86400;
     const next = new Date(Date.now()+nextSeconds*1000).toISOString();
     await finishTask(supabase,task,{status:"completed",evidence_written:evidenceWritten,result,next_run_at:next});
     await supabase.from("batch_leads").update({top500_last_investigated_at:new Date().toISOString(),top500_next_investigation_at:next}).eq("id",row.id);

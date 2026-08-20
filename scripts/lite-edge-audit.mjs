@@ -141,7 +141,9 @@ const securityFiles = {
   spiralCompatibility: read("supabase/migrations/20260820g_cedar_spiral_compatibility.sql"),
   boundedCrawlerQueue: read("supabase/migrations/20260820h_bounded_crawler_queue.sql"),
   taskCompletionMigration: read("supabase/migrations/20260820i_normalize_task_completion.sql"),
+  imageryBackfillMigration: read("supabase/migrations/20260820j_prioritize_imagery_backfill.sql"),
   top500Network: read("app/api/twincities/top500-network/route.js"),
+  top500Burst: read("app/api/cron/top500-burst/[shard]/route.ts"),
   leaderboardCron: read("app/api/cron/apex-leaderboard/route.ts"),
 };
 assert.ok(!/SUPABASE_ANON_KEY|PUBLISHABLE_KEY/.test(securityFiles.server), "server client must not fall back to public keys");
@@ -176,12 +178,18 @@ assert.ok(!/status:\s*["']complete["']/.test(securityFiles.top500Network), "craw
 assert.ok(securityFiles.top500Network.includes('rankingEngine: "lite_evidence_twin"'), "network pulse must preserve the canonical Lite ranking");
 assert.ok(securityFiles.top500Network.includes("Promise.all((tasks||[]).map"), "bounded crawler claims must run concurrently within Hobby's timeout");
 assert.ok(securityFiles.top500Network.includes("lite:true,force:false"), "bulk imagery must use the fast cached overhead path");
+assert.ok(securityFiles.top500Network.includes("imagery: 30 * 86400"), "imagery refreshes must follow the 30-day cache horizon");
+assert.ok(securityFiles.imageryBackfillMigration.includes("priority = 2000"), "initial Top 500 imagery must outrank secondary crawler lanes");
+assert.ok(securityFiles.top500Burst.includes("CRON_SECRET"), "imagery burst endpoints must require Vercel cron authentication");
+assert.ok(securityFiles.top500Burst.includes("limit: 8"), "each daily burst must stay bounded");
 assert.ok(securityFiles.leaderboardCron.includes("seedCedarSpiral"), "daily leaderboard cron must advance the Cedar spiral before scoring");
 assert.ok(securityFiles.leaderboardCron.includes("p_keep: LEADERBOARD_LIMIT"), "daily leaderboard cron must retain only the Top 500 spiral candidates");
 
 const vercel = JSON.parse(read("vercel.json"));
 const leaderboardCron = vercel.crons?.find((entry) => entry.path === "/api/cron/apex-leaderboard");
 assert.equal(leaderboardCron?.schedule, "0 0 * * *", "Lite leaderboard must remain Hobby-safe at once per day");
+const imageryBursts = vercel.crons?.filter((entry) => entry.path.startsWith("/api/cron/top500-burst/")) || [];
+assert.equal(imageryBursts.length, 5, "Hobby-safe imagery backfill must have five bounded daily shards");
 assert.ok(vercel.crons.every((entry) => /^\d{1,2} \d{1,2} \* \* \*$/.test(entry.schedule)), "every Hobby cron must run no more than daily");
 
 console.log("AUDIT PASSED: AeroLeadAI Lite Evidence Twin, private access, and compact imagery invariants");
