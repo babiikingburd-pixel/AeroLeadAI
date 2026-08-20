@@ -1,4 +1,5 @@
 import { supabaseServer } from "../../../../lib/supabaseServer";
+import { resolveSupabaseServerConfig } from "../../../../lib/supabaseEnvironment";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export async function GET() {
 
   const supabase = supabaseServer();
   checks.supabaseConfigured = !!supabase;
-  checks.imageBucketConfigured = !!process.env.NEXT_PUBLIC_SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+  checks.imageBucketConfigured = resolveSupabaseServerConfig().configured;
   checks.mapboxConfigured = !!(process.env.MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN);
   checks.googleConfigured = !!process.env.GOOGLE_MAPS_API_KEY;
 

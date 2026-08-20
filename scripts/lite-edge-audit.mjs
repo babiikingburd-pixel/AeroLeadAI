@@ -147,6 +147,10 @@ const securityFiles = {
   leaderboardCron: read("app/api/cron/apex-leaderboard/route.ts"),
   serviceProxy: read("supabase/functions/aerolead-service-proxy/index.ts"),
   gatewayCheck: read("app/api/auth/gateway-check/route.js"),
+  permitLookup: read("app/api/permit-lookup/route.js"),
+  browserSupabase: read("lib/supabaseClient.js"),
+  propertyBrowserSupabase: read("lib/propertyIntelligenceV1/supabaseClient.js"),
+  sessionSupabase: read("utils/supabase/server.ts"),
 };
 assert.ok(!/SUPABASE_ANON_KEY|PUBLISHABLE_KEY/.test(securityFiles.server), "server client must not fall back to public keys");
 const browserSource = walkFiles("components").map(read).join("\n");
@@ -188,6 +192,11 @@ assert.ok(securityFiles.serviceProxy.includes('Deno.env.get("SUPABASE_SERVICE_RO
 assert.ok(securityFiles.serviceProxy.includes("verifyWithAeroLeadAI"), "service-role proxy must verify AeroLeadAI's signed server request");
 assert.ok(securityFiles.serviceProxy.includes('const ALLOWED_PATHS = ["/rest/v1/", "/storage/v1/"]'), "service-role proxy must restrict upstream namespaces");
 assert.ok(securityFiles.gatewayCheck.includes("verifyGatewaySignature"), "Vercel must verify every new proxy authorization session");
+assert.ok(securityFiles.permitLookup.includes("authenticatedSupabaseFetch"), "permit persistence must use the clean-project gateway");
+assert.ok(!securityFiles.permitLookup.includes("process.env.NEXT_PUBLIC_SUPABASE_URL"), "permit persistence must not reuse stale public project variables");
+assert.ok(securityFiles.browserSupabase.includes("const supabase = null"), "legacy browser persistence must remain disabled against the owner-only database");
+assert.ok(securityFiles.propertyBrowserSupabase.includes("const supabase = null"), "property browser persistence must remain disabled against the owner-only database");
+assert.ok(!securityFiles.sessionSupabase.includes("process.env.NEXT_PUBLIC_SUPABASE"), "session clients must stay pinned to the clean Supabase project");
 assert.ok(securityFiles.leaderboardCron.includes("seedCedarSpiral"), "daily leaderboard cron must advance the Cedar spiral before scoring");
 assert.ok(securityFiles.leaderboardCron.includes("p_keep: LEADERBOARD_LIMIT"), "daily leaderboard cron must retain only the Top 500 spiral candidates");
 

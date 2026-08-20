@@ -23,6 +23,7 @@
 // says exactly which of these it did, not more.
 
 import { supabaseGet, supabasePatch, supabasePost } from "../../../lib/supabaseRest";
+import { resolveSupabaseServerConfig } from "../../../lib/supabaseEnvironment";
 import { withCrawlerLog } from "../../../lib/crawlerLog";
 import { planCycle } from "../../../lib/planner";
 export const dynamic = "force-dynamic";
@@ -45,8 +46,8 @@ function checkAuth(req) {
 // becomes "rescan what's actually worth the compute this cycle."
 async function refreshKnowledge() {
   return withCrawlerLog("knowledge_refresh", async () => {
-    const { url } = { url: process.env.NEXT_PUBLIC_SUPABASE_URL };
-    if (!url) return { succeeded: 0, failed: 0, errors: ["Supabase not configured"] };
+    const { configured } = resolveSupabaseServerConfig();
+    if (!configured) return { succeeded: 0, failed: 0, errors: ["Supabase not configured"] };
 
     const plan = await planCycle("high", 10); // high tier only — this is the 15-min-cadence loop; medium/low tiers are separate cron endpoints, see /api/tier-medium and /api/tier-low
     if (plan.rescanCandidates.length === 0) {

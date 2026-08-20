@@ -19,7 +19,7 @@ export async function POST(req) {
         success: false,
         url: null,
         propertyId,
-        error: "Supabase not configured — image was not persisted. Set NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY to enable uploads.",
+        error: "The secure image store is unavailable, so this image was not persisted.",
       });
     }
 
