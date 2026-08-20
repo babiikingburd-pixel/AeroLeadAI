@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ACCESS_COOKIE, accessConfiguration, verifyAccessToken } from "../../../../lib/security/accessSession";
 import { resolveSupabaseServerConfig, supabaseEnvironmentDiagnostics } from "../../../../lib/supabaseEnvironment";
+import { authenticatedSupabaseFetch } from "../../../../lib/supabaseServiceProxy";
 
 export const dynamic = "force-dynamic";
 
@@ -8,8 +9,7 @@ async function probeDatabaseIdentity() {
   const { url, key, configured } = resolveSupabaseServerConfig();
   if (!configured) return { ok: false, status: 503, category: "service-key-not-configured" };
   try {
-    const response = await fetch(`${url}/rest/v1/top500_slots?select=slot_no&limit=1`, {
-      headers: { apikey: key, authorization: `Bearer ${key}` },
+    const response = await authenticatedSupabaseFetch(`${url}/rest/v1/top500_slots?select=slot_no&limit=1`, {
       cache: "no-store",
       signal: AbortSignal.timeout(8_000),
     });

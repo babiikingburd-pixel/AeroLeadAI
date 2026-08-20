@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { resolveSupabaseServerConfig } from "../../lib/supabaseEnvironment";
+import { AEROLEAD_EDGE_INVOKE_KEY, authenticatedSupabaseFetch } from "../../lib/supabaseServiceProxy";
 
 // SECURITY: this file is server-only. It reads a Supabase secret/service key,
 // which must NEVER be prefixed with NEXT_PUBLIC_ or referenced from any
@@ -17,7 +18,8 @@ export const createServiceClient = () => {
     );
   }
 
-  return createServerClient(supabaseUrl, serviceRoleKey, {
+  return createServerClient(supabaseUrl, serviceRoleKey || AEROLEAD_EDGE_INVOKE_KEY, {
+    global: { fetch: authenticatedSupabaseFetch },
     cookies: {
       getAll() {
         return [];
