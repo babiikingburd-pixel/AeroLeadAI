@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { buildEvidenceLedger, fingerprintEvidence, rankEvidenceTwins, scoreEvidenceTwin } from "../lib/lite/evidenceTwin.mjs";
+import { CEDAR_SPIRAL_SEED, normalizeHennepinParcel } from "../lib/lite/minnesotaSpiralSeed.mjs";
 
 const root = process.cwd();
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -80,6 +81,31 @@ assert.equal(unknownGeography.breakdown.confidence.identity.score, 10, "null coo
 const apartment = scoreEvidenceTwin({ ...base, id: "apt-1", property_class: "apartment building" });
 assert.equal(apartment.eligible, false);
 
+assert.equal(CEDAR_SPIRAL_SEED.inputAddress, "8600 Cedar Ave S, Bloomington, MN 55425");
+const hennepinFixture = {
+  PID: "0102724340006",
+  HOUSE_NO: 2100,
+  FRAC_HOUSE_NO: "",
+  STREET_NM: "86TH ST E",
+  ZIP_CD: "55425",
+  MUNIC_NM: "BLOOMINGTON",
+  BUILD_YR: "1930",
+  PR_TYP_NM1: "RESIDENTIAL",
+  MKT_VAL_TOT: 219300,
+  MULTI_ADDR_IND: "",
+  CONDO_NO: "",
+  PROPERTY_STATUS_CD: "0",
+  LAT: 44.848293,
+  LON: -93.242662,
+};
+const cedarParcel = normalizeHennepinParcel(hennepinFixture, "2026-08-20T00:00:00.000Z");
+assert.equal(cedarParcel?.address, "2100 86TH ST E");
+assert.equal(cedarParcel?.residential_status, "verified");
+assert.equal(cedarParcel?.spiral_seed_id, "cedar-8600");
+assert.equal(normalizeHennepinParcel({ ...hennepinFixture, PID: "apt", PR_TYP_NM1: "APARTMENT" }), null);
+assert.equal(normalizeHennepinParcel({ ...hennepinFixture, PID: "condo", CONDO_NO: "101" }), null);
+assert.equal(normalizeHennepinParcel({ ...hennepinFixture, PID: "seed", HOUSE_NO: 8600, STREET_NM: "OLD CEDAR AVE S" }), null);
+
 assert.equal(fingerprintEvidence({ b: 2, a: 1 }), fingerprintEvidence({ a: 1, b: 2 }), "fingerprints must be deterministic");
 const ledger = buildEvidenceLedger(base, [{ ...image, dataUrl: "data:image/jpeg;base64,AAAA" }]);
 assert.ok(!JSON.stringify(ledger).includes("data:image"), "evidence ledger must never retain image bytes");
@@ -110,6 +136,13 @@ const securityFiles = {
   imagery: read("app/api/imagery-agent/route.js"),
   continuousScan: read("app/api/scan/continuous/route.js"),
   scoreRefresh: read("lib/lite/scoreRefresh.mjs"),
+  spiralSeed: read("lib/lite/minnesotaSpiralSeed.mjs"),
+  spiralMigration: read("supabase/migrations/20260820f_cedar_spiral_frontier.sql"),
+  spiralCompatibility: read("supabase/migrations/20260820g_cedar_spiral_compatibility.sql"),
+  boundedCrawlerQueue: read("supabase/migrations/20260820h_bounded_crawler_queue.sql"),
+  taskCompletionMigration: read("supabase/migrations/20260820i_normalize_task_completion.sql"),
+  top500Network: read("app/api/twincities/top500-network/route.js"),
+  leaderboardCron: read("app/api/cron/apex-leaderboard/route.ts"),
 };
 assert.ok(!/SUPABASE_ANON_KEY|PUBLISHABLE_KEY/.test(securityFiles.server), "server client must not fall back to public keys");
 const browserSource = walkFiles("components").map(read).join("\n");
@@ -131,6 +164,18 @@ assert.ok(securityFiles.continuousScan.includes("synthetic: false"), "manual sca
 assert.ok(securityFiles.scoreRefresh.includes("lite_begin_score_refresh"), "daily scoring must remove stale score incumbents");
 assert.ok(securityFiles.scoreRefresh.includes("lite_cancel_stale_top500_tasks"), "rank replacements must cancel stale crawler jobs");
 assert.ok(securityFiles.scoreRefresh.includes("lite_prune_compact_data"), "daily scoring must enforce bounded evidence retention");
+assert.ok(securityFiles.spiralSeed.includes("PR_TYP_NM1 = 'RESIDENTIAL'"), "spiral import must query exact single-family parcels");
+assert.ok(securityFiles.spiralSeed.includes("8600 Cedar Ave S"), "spiral import must retain the user-selected map origin");
+assert.ok(securityFiles.spiralMigration.includes("lite_prune_spiral_candidates"), "spiral candidates must be bounded to prevent another database freeze");
+assert.ok(securityFiles.spiralMigration.includes("revoke all privileges"), "spiral state must remain owner-only");
+assert.ok(securityFiles.spiralCompatibility.includes("parcel_id text"), "clean recovery schema must retain parcel route compatibility");
+assert.ok(securityFiles.boundedCrawlerQueue.includes("ux_top500_tasks_one_active_lane"), "crawler queue must enforce one active task per property lane");
+assert.ok(securityFiles.boundedCrawlerQueue.includes("task.status in ('queued', 'running')"), "overdue queued tasks must not be duplicated daily");
+assert.ok(securityFiles.taskCompletionMigration.includes("status = 'completed'"), "historical crawler completion statuses must become retainable");
+assert.ok(!/status:\s*["']complete["']/.test(securityFiles.top500Network), "crawler workers must use the retention-compatible completed status");
+assert.ok(securityFiles.top500Network.includes('rankingEngine: "lite_evidence_twin"'), "network pulse must preserve the canonical Lite ranking");
+assert.ok(securityFiles.leaderboardCron.includes("seedCedarSpiral"), "daily leaderboard cron must advance the Cedar spiral before scoring");
+assert.ok(securityFiles.leaderboardCron.includes("p_keep: LEADERBOARD_LIMIT"), "daily leaderboard cron must retain only the Top 500 spiral candidates");
 
 const vercel = JSON.parse(read("vercel.json"));
 const leaderboardCron = vercel.crons?.find((entry) => entry.path === "/api/cron/apex-leaderboard");

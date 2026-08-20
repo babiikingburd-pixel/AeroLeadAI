@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/utils/supabase/server";
 import { refreshLiteLeaderboard } from "@/lib/lite/scoreRefresh.mjs";
+import { CEDAR_SPIRAL_SEED, seedCedarSpiral } from "@/lib/lite/minnesotaSpiralSeed.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -43,12 +44,37 @@ export async function GET(request: NextRequest) {
     const supabase = createServiceClient();
     let data;
     let engine = "lite_evidence_twin";
+    let spiralSeed = null;
+
+    try {
+      // Hobby runs once daily. Each pass resumes the deterministic spiral at
+      // 8600 Cedar Ave S and admits a small, verified single-family batch.
+      spiralSeed = await seedCedarSpiral(supabase, { limit: 100 });
+    } catch (seedError) {
+      // A source outage must not prevent already-retained properties from
+      // being re-ranked or their evidence work from continuing.
+      console.warn("Cedar spiral import unavailable; refreshing retained candidates", {
+        cycleId,
+        error: seedError instanceof Error ? seedError.message : String(seedError)
+      });
+    }
 
     try {
       // The V23 GateKeeper control-plane ideas now run before slot assignment:
       // contradiction-first evidence, independent sources, reproducibility,
       // and opportunity/confidence/value kept as separate scores.
       data = await refreshLiteLeaderboard(supabase, { scanLimit: 1500 });
+
+      if (spiralSeed) {
+        const pruned = await supabase.rpc("lite_prune_spiral_candidates", {
+          p_seed_id: CEDAR_SPIRAL_SEED.id,
+          p_keep: LEADERBOARD_LIMIT
+        });
+        if (pruned.error) throw new Error(`Lite spiral retention failed: ${pruned.error.message}`);
+        data = { ...data, spiral_seed: spiralSeed, spiral_retention: pruned.data };
+      } else {
+        data = { ...data, spiral_seed: null };
+      }
     } catch (liteError) {
       // Safe rollout path for a deployment that lands moments before its
       // matching migration. The legacy function remains service-role-only and

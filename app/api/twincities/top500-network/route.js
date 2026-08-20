@@ -56,7 +56,7 @@ async function writeFinding(supabase, task, source, claim, evidence, confidence,
 
 async function finishTask(supabase, task, patch) {
   await supabase.from("top500_crawler_tasks").update({
-    status: patch.status || "complete",
+    status: patch.status || "completed",
     finished_at: new Date().toISOString(),
     result: patch.result || {},
     evidence_written: patch.evidence_written || 0,
@@ -223,7 +223,7 @@ async function processTask(supabase, task, origin) {
 
     const nextSeconds = task.lane_name === "damage" ? 3600 : task.lane_name === "permits" ? 1800 : 900;
     const next = new Date(Date.now()+nextSeconds*1000).toISOString();
-    await finishTask(supabase,task,{status:"complete",evidence_written:evidenceWritten,result,next_run_at:next});
+    await finishTask(supabase,task,{status:"completed",evidence_written:evidenceWritten,result,next_run_at:next});
     await supabase.from("batch_leads").update({top500_last_investigated_at:new Date().toISOString(),top500_next_investigation_at:next}).eq("id",row.id);
     return {ok:true,lane:task.lane_name,result,evidenceWritten};
   } catch(e) {
@@ -234,6 +234,29 @@ async function processTask(supabase, task, origin) {
 }
 
 async function rebalance(supabase) {
+  // Once the canonical Lite score table is present, it owns slot ordering.
+  // The legacy network pulse must not replace that ranking with the older
+  // priority_score order a few hours after the leaderboard cron runs.
+  const { count: liteCount, error: liteCountError } = await supabase
+    .from("aerolead_property_scores")
+    .select("property_id", { count: "exact", head: true })
+    .lte("lite_rank", 500);
+  if (!liteCountError && Number(liteCount) > 0) {
+    const { data: sync, error: syncError } = await supabase.rpc("lite_sync_top500_slots");
+    if (syncError) throw new Error(syncError.message);
+    const { data: staleTasksCancelled, error: reconcileError } = await supabase.rpc("lite_cancel_stale_top500_tasks");
+    if (reconcileError) throw new Error(reconcileError.message);
+    return {
+      rankingEngine: "lite_evidence_twin",
+      assigned: Number(sync?.occupied) || Number(liteCount),
+      replaced: 0,
+      opened: Math.max(0, 500 - (Number(sync?.occupied) || 0)),
+      candidates: Number(liteCount),
+      tasksEnsured: Number(sync?.tasks_generated) || 0,
+      staleTasksCancelled: Number(staleTasksCancelled) || 0,
+    };
+  }
+
   // First, determine residential candidates from persisted positive evidence.
   // Unknown properties remain in the background pool and cannot be delivered
   // to residential contractors.
@@ -282,7 +305,7 @@ async function rebalance(supabase) {
     assigned++;
   }
   const {data:ensure} = await supabase.rpc("ensure_top500_crawler_tasks");
-  return {assigned,replaced,opened,candidates:candidates?.length||0,tasksEnsured:Number(ensure||0)};
+  return {rankingEngine:"legacy_priority_fallback",assigned,replaced,opened,candidates:candidates?.length||0,tasksEnsured:Number(ensure||0)};
 }
 
 export async function POST(req) {
