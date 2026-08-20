@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/twincities/network-pulse",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 2 * * *"
     },
     {
       "path": "/api/heartbeat",
@@ -34,7 +34,7 @@
     },
     {
       "path": "/api/cron/apex-leaderboard",
-      "schedule": "*/30 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
