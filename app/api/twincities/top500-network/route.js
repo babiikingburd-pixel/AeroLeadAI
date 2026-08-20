@@ -146,7 +146,9 @@ async function processTask(supabase, task, origin) {
       if (row.lat == null || row.lon == null) throw new Error("Missing coordinates");
       const r = await fetch(`${origin}/api/imagery-agent`, {
         method:"POST", headers:{"content-type":"application/json"},
-        body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:false,force:true}),
+        // The daily Hobby worker needs the two overhead roof views first.
+        // Street-view sweeps are slower and damage has its own review lane.
+        body:JSON.stringify({lat:row.lat,lon:row.lon,address:row.address,leadId:row.id,lite:true,force:false}),
         signal:AbortSignal.timeout(18000),
       });
       const data = await r.json().catch(()=>({}));
@@ -325,8 +327,11 @@ export async function POST(req) {
     await supabase.rpc("schedule_due_top500_lanes");
     const {data:tasks,error}=await supabase.rpc("claim_top500_crawler_tasks",{p_worker_id:workerId,p_limit:Math.min(Number(body.limit)||4,8)});
     if(error) return Response.json({ok:false,error:error.message},{status:500});
-    const results=[];
-    for(const task of tasks||[]) results.push(await processTask(supabase,task,new URL(req.url).origin));
+    // A damage task can legitimately spend almost 50 seconds across imagery
+    // and vision. Serial execution made two such claims exceed Hobby's 60s
+    // function ceiling. SKIP LOCKED already isolates the claimed tasks, so
+    // execute this small bounded batch concurrently.
+    const results=await Promise.all((tasks||[]).map(task=>processTask(supabase,task,new URL(req.url).origin)));
     return Response.json({ok:true,version:"APEX14.1",workerId,claimed:tasks?.length||0,results});
   } catch(e) {
     return Response.json({ok:false,error:e.message},{status:500});

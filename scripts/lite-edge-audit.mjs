@@ -174,6 +174,8 @@ assert.ok(securityFiles.boundedCrawlerQueue.includes("task.status in ('queued', 
 assert.ok(securityFiles.taskCompletionMigration.includes("status = 'completed'"), "historical crawler completion statuses must become retainable");
 assert.ok(!/status:\s*["']complete["']/.test(securityFiles.top500Network), "crawler workers must use the retention-compatible completed status");
 assert.ok(securityFiles.top500Network.includes('rankingEngine: "lite_evidence_twin"'), "network pulse must preserve the canonical Lite ranking");
+assert.ok(securityFiles.top500Network.includes("Promise.all((tasks||[]).map"), "bounded crawler claims must run concurrently within Hobby's timeout");
+assert.ok(securityFiles.top500Network.includes("lite:true,force:false"), "bulk imagery must use the fast cached overhead path");
 assert.ok(securityFiles.leaderboardCron.includes("seedCedarSpiral"), "daily leaderboard cron must advance the Cedar spiral before scoring");
 assert.ok(securityFiles.leaderboardCron.includes("p_keep: LEADERBOARD_LIMIT"), "daily leaderboard cron must retain only the Top 500 spiral candidates");
 
