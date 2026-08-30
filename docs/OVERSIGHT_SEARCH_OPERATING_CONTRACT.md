@@ -2,6 +2,7 @@
 
 Version: 1.0  
 Initial territory: 55431 (Bloomington, Minnesota)  
+First expansion: simultaneous southern front across Burnsville, Apple Valley, and Eagan  
 System of record: `aeroleadai-rebuild`
 
 ## Purpose
@@ -63,7 +64,9 @@ Each daily cycle:
 
 ## Expansion
 
-The current ring remains the priority. The next ring unlock percentage is one tenth of current-ring completion: `next_unlock_pct = current_completion_pct / 10`. Expansion never reduces the work assigned to completing the current ring and never permits duplicate territory allocation.
+The current ring remains the priority. The next ring unlock percentage is one tenth of current-ring completion: `next_unlock_pct = current_completion_pct / 10`. The first unlocked frontier is intentionally biased south across the Minnesota River. Burnsville, Apple Valley, and Eagan receive equal per-cycle parcel quotas and equal worker targets; no city waits for another city to finish. Expansion never reduces the work assigned to completing the anchor ring and never permits duplicate territory allocation.
+
+Dakota County's official `Residential Improved` layer is the identity and structure source for the three-city front. Only records whose dwelling type is exactly `S.FAM.RES` enter the queue. Townhouses and other attached or multifamily records are excluded before scoring.
 
 ## Truth and safety rules
 
@@ -73,4 +76,3 @@ The current ring remains the priority. The next ring unlock percentage is one te
 - No public browser-key write access.
 - Paid providers remain disabled until credentials, pricing, and caps are confirmed.
 - A property is an opportunity candidate, not a diagnosis, inspection result, insurance claim, or guarantee of roof damage.
-
