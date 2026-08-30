@@ -1,0 +1,10 @@
+drop policy if exists "service role full access evidence" on public.evidence_records;
+drop policy if exists "service role full access published" on public.published_summary;
+drop policy if exists "service role full access rings" on public.ring_status;
+drop policy if exists "service role full access profiles" on public.roof_profiles;
+create policy "service_role_all_evidence_records" on public.evidence_records for all to service_role using (true) with check (true);
+create policy "service_role_all_published_summary" on public.published_summary for all to service_role using (true) with check (true);
+create policy "service_role_all_ring_status" on public.ring_status for all to service_role using (true) with check (true);
+create policy "service_role_all_roof_profiles" on public.roof_profiles for all to service_role using (true) with check (true);
+revoke all on public.evidence_records, public.published_summary, public.ring_status, public.roof_profiles from anon, authenticated;
+grant all on public.evidence_records, public.published_summary, public.ring_status, public.roof_profiles to service_role;
