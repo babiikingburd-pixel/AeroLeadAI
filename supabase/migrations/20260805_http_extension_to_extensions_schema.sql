@@ -18,15 +18,15 @@
 -- failing on DROP EXTENSION.
 do $migration$
 declare
-  current_schema text;
+  v_extension_schema text;
 begin
   select n.nspname
-    into current_schema
+    into v_extension_schema
     from pg_extension e
     join pg_namespace n on n.oid = e.extnamespace
    where e.extname = 'http';
 
-  if current_schema = 'public' then
+  if v_extension_schema = 'public' then
     drop extension http;
     create extension http with schema extensions;
   end if;
