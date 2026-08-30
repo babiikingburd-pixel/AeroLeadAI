@@ -99,6 +99,10 @@
     {
       "path": "/api/cron/apex-leaderboard",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/oversight-discovery",
+      "schedule": "30 5 * * *"
     }
   ]
 }
