@@ -1,5 +1,19 @@
 # APEX 10.1 Production Launch
 
+## Oversight 1.1 continuation
+
+The command interface is at `/oversight`. It reads the private
+`aeroleadai-rebuild` model and never inserts demo leads or converts missing
+evidence into a score.
+
+`POST /api/oversight/run` runs configured assessor, permit, NOAA and imagery
+providers concurrently, persists every evidence record, evaluates GateKeeper
+contradictions and corroborations, updates `roof_profiles`, and publishes only
+allowed profiles to `published_summary`. The route requires `INTERNAL_API_KEY`.
+
+Configure provider URL templates with the `OVERSIGHT_*` variables documented in
+`.env.example`. Unavailable providers do not halt the rest of the pipeline.
+
 **Complete cumulative deployment package:** see `ONE_STEP_LAUNCH.md` for the shortest path to a live Vercel deployment.
 
 ---

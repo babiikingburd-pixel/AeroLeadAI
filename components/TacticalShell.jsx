@@ -31,7 +31,7 @@ export default function TacticalShell({ children }) {
   // its own full-viewport immersive shell (own topbar, flight-deck rail,
   // bottom bar) — wrapping it in the standard admin sidebar+topbar doubled
   // up the chrome and broke the "glass spaceship" layout it's meant to be.
-  if (pathname?.startsWith("/portal/") || pathname === "/cockpit") return children;
+  if (pathname?.startsWith("/portal/") || pathname === "/cockpit" || pathname === "/oversight") return children;
 
   return <ShellChrome pathname={pathname}>{children}</ShellChrome>;
 }
