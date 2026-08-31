@@ -1,4 +1,4 @@
-create extension if not exists pg_net;
+create extension if not exists pg_net with schema extensions;
 create extension if not exists pg_cron with schema pg_catalog;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
