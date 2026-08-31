@@ -44,13 +44,17 @@ async function shovelsLookup(address: string, apiKey: string) {
   const search = await fetch(`https://api.shovels.ai/v2/addresses/search?q=${encodeURIComponent(address)}`, { headers, signal: AbortSignal.timeout(12000), cache: "no-store" });
   if (!search.ok) throw new Error(`shovels_address_http_${search.status}`);
   const searchBody = await search.json();
-  const match = Array.isArray(searchBody) ? searchBody[0] : searchBody?.items?.[0] || searchBody?.results?.[0];
+  const match = Array.isArray(searchBody) ? searchBody[0] : searchBody?.items?.[0] || searchBody?.results?.[0] || searchBody?.data?.[0];
   const geoId = match?.geo_id || match?.id || match?.address_id;
   if (!geoId) return [];
-  const permits = await fetch(`https://api.shovels.ai/v2/permits/search?geo_id=${encodeURIComponent(geoId)}&permit_tags=roofing`, { headers, signal: AbortSignal.timeout(12000), cache: "no-store" });
+  const today = new Date();
+  const from = new Date(Date.UTC(today.getUTCFullYear() - 25, 0, 1)).toISOString().slice(0, 10);
+  const to = today.toISOString().slice(0, 10);
+  const query = new URLSearchParams({ geo_id: String(geoId), permit_from: from, permit_to: to, permit_tags: "roofing", size: "100" });
+  const permits = await fetch(`https://api.shovels.ai/v2/permits/search?${query}`, { headers, signal: AbortSignal.timeout(12000), cache: "no-store" });
   if (!permits.ok) throw new Error(`shovels_permits_http_${permits.status}`);
   const permitBody = await permits.json();
-  return Array.isArray(permitBody) ? permitBody : permitBody?.items || permitBody?.results || [];
+  return Array.isArray(permitBody) ? permitBody : permitBody?.items || permitBody?.results || permitBody?.data || [];
 }
 
 async function recalculate(db: any, parcelId: string) {
