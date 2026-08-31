@@ -11,7 +11,7 @@ const ROUTE_LIMITS = {
   "/api/zip-scan": 10,
   "/api/crm-sync": 10,
 };
-const PUBLIC_EXACT = new Set(["/access", "/api/auth/access", "/api/auth/session", "/api/auth/logout", "/api/auth/gateway-check"]);
+const PUBLIC_EXACT = new Set(["/access", "/api/auth/access", "/api/auth/session", "/api/auth/logout", "/api/auth/gateway-check", "/api/oversight/pulse/permits"]);
 const hits = new Map();
 
 function allowRate(key, limit) {
