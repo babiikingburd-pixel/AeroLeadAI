@@ -110,6 +110,15 @@ export async function POST(request: NextRequest) {
     .order("commercial_priority", { ascending: false })
     .limit(500);
   if (profileError) return NextResponse.json({ ok: false, error: profileError.message }, { status: 500 });
+  const { data: permitTasks, error: permitTaskError } = await db.from("oversight_audit_tasks")
+    .select("parcel_id,priority")
+    .eq("requirement", "permit_history")
+    .eq("status", "READY")
+    .lte("next_attempt_at", new Date().toISOString())
+    .order("priority", { ascending: false })
+    .order("updated_at", { ascending: true })
+    .limit(BATCH_SIZE);
+  if (permitTaskError) return NextResponse.json({ ok: false, error: permitTaskError.message }, { status: 500 });
   const ids = (profiles || []).map((profile: any) => profile.parcel_id);
   const { data: evidence, error: evidenceError } = ids.length ? await db.from("evidence_records")
     .select("parcel_id,type,reality,payload,captured_at")
@@ -124,6 +133,7 @@ export async function POST(request: NextRequest) {
   for (const row of evidence || []) if (row.type === "STRUCTURE" && !structure.has(row.parcel_id)) structure.set(row.parcel_id, row.payload || {});
   const preferred = new Map((profiles || []).map((profile: any) => [profile.parcel_id, profile]));
   const ordered = [
+    ...(permitTasks || []).map((task: any) => preferred.get(task.parcel_id)).filter(Boolean),
     ...imageryParcelIds.map((id: string) => preferred.get(id)).filter(Boolean),
     ...(profiles || []),
   ];

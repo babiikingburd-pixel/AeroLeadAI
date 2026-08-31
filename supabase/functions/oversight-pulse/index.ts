@@ -37,12 +37,24 @@ function esriUrl(latitude: number, longitude: number) {
 }
 
 async function imageCandidates() {
+  const { data: tasks, error: taskError } = await db.from("oversight_audit_tasks")
+    .select("parcel_id,priority")
+    .eq("requirement", "imagery_capture")
+    .eq("status", "READY")
+    .lte("next_attempt_at", new Date().toISOString())
+    .order("priority", { ascending: false })
+    .order("updated_at", { ascending: true })
+    .limit(BATCH_SIZE);
+  if (taskError) throw taskError;
+  const taskIds = (tasks || []).map((row) => row.parcel_id);
+  if (!taskIds.length) return [];
   const { data: profiles, error } = await db.from("roof_profiles")
     .select("parcel_id,address,commercial_priority,updated_at")
-    .order("commercial_priority", { ascending: false })
-    .limit(500);
+    .in("parcel_id", taskIds);
   if (error) throw error;
-  const ids = (profiles || []).map((row) => row.parcel_id);
+  const order = new Map(taskIds.map((id, index) => [id, index]));
+  const orderedProfiles = [...(profiles || [])].sort((a, b) => (order.get(a.parcel_id) ?? 999) - (order.get(b.parcel_id) ?? 999));
+  const ids = orderedProfiles.map((row) => row.parcel_id);
   if (!ids.length) return [];
   const { data: evidence, error: evidenceError } = await db.from("evidence_records")
     .select("parcel_id,type,reality,payload,captured_at")
@@ -54,7 +66,7 @@ async function imageCandidates() {
   const hasImage = new Set((evidence || []).filter((row) => row.type === "IMAGERY" && ["REAL_NOW", "CACHED_REAL"].includes(row.reality)).map((row) => row.parcel_id));
   const structure = new Map<string, any>();
   for (const row of evidence || []) if (row.type === "STRUCTURE" && !structure.has(row.parcel_id)) structure.set(row.parcel_id, row);
-  return (profiles || []).filter((profile) => !hasImage.has(profile.parcel_id) && coordinates(structure.get(profile.parcel_id))).slice(0, BATCH_SIZE).map((profile) => ({ ...profile, ...coordinates(structure.get(profile.parcel_id))! }));
+  return orderedProfiles.filter((profile) => !hasImage.has(profile.parcel_id) && coordinates(structure.get(profile.parcel_id))).slice(0, BATCH_SIZE).map((profile) => ({ ...profile, ...coordinates(structure.get(profile.parcel_id))! }));
 }
 
 async function storeImage(candidate: any) {

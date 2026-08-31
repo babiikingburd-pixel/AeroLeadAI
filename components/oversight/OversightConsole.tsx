@@ -15,6 +15,8 @@ export default function OversightConsole({ initial }: { initial: any }) {
   const verified = initial.profiles.filter((p: any) => p.gate_allowed).length;
   const review = initial.profiles.filter((p: any) => p.state === "REVIEW_REQUIRED").length;
   const ring = initial.rings.find((r: any) => r.active) || initial.rings[0];
+  const audit = active ? initial.audits?.[active.parcel_id] : null;
+  const doctorComplete = Object.values(initial.audits || {}).filter((item: any) => item.complete).length;
 
   return <main className="ov-shell">
     <div className="ov-grid" /><div className="ov-vignette" />
@@ -28,7 +30,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
       <Stat label="Profiles" value={initial.profiles.length} />
       <Stat label="Verified" value={verified} tone="green" />
       <Stat label="Real evidence" value={liveCount} tone="cyan" />
-      <Stat label="Human review" value={review} tone="amber" />
+      <Stat label="Doctor complete" value={`${doctorComplete}/${initial.profiles.length}`} tone="amber" />
       <Stat label="Active ring" value={ring?.ring_id || "—"} sub={ring ? `${Math.round(Number(ring.completion_pct))}% complete` : "awaiting seed"} />
     </section>
 
@@ -71,6 +73,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
           {["IMAGERY","PERMIT","WEATHER","STRUCTURE"].map(t => { const r=type(t)[0]; return <div className="evidence-line" key={t}><i className={r ? r.reality === "UNAVAILABLE" ? "bad" : "good" : "idle"}/><span><b>{t}</b><small>{r ? `${r.provider} · ${realityLabel[r.reality] || r.reality}` : "not collected"}</small></span></div> })}
         </div>
         <div className="decision-log"><small>DECISION BASIS</small>{(active?.gate_reasons || []).map((x:string)=><p key={x}>→ {x}</p>)}{!(active?.gate_reasons || []).length && <p>→ Awaiting evidence</p>}</div>
+        <DoctorPanel audit={audit} />
       </aside>
     </section>
 
@@ -82,3 +85,4 @@ function Stat({label,value,tone="",sub}:{label:string,value:any,tone?:string,sub
 function Empty({text}:{text:string}) { return <div className="empty-queue">{text}</div> }
 function Instrument({title,records,className,accent}:{title:string,records:any[],className:string,accent:string}) { const r=records[0]; const imageUrl=r?.payload?.image_url; return <article className={`instrument ${className} ${accent} ${r ? "present" : "standby"}`}><header><span>{title}</span><b>{r ? realityLabel[r.reality] || r.reality : "STANDBY"}</b></header><div>{r ? <>{imageUrl && <a className="instrument-image" href={imageUrl} target="_blank" rel="noreferrer"><img src={imageUrl} alt={`Satellite view for ${r.parcel_id}`} /></a>}<strong>{r.provider}</strong><p>{r.effective_at ? new Date(r.effective_at).toLocaleDateString() : r.payload?.capture_date || "Current available imagery"}</p><small>{Math.round(Number(r.confidence)*100)}% source confidence</small></> : <><strong>NO RECORD</strong><p>Provider will retry autonomously</p></>}</div></article> }
 function Gauge({value}:{value:number}) { const pct=Math.round(value*100); return <div className="gauge-wrap"><div className="gauge" style={{background:`conic-gradient(#5fe0ff ${pct*3.6}deg, rgba(255,255,255,.06) 0)`}}><span>{pct}<small>%</small></span></div><p>EVIDENCE CONFIDENCE</p></div> }
+function DoctorPanel({audit}:{audit:any}) { if (!audit) return null; return <section className="doctor-panel"><header><span>DOCTOR SELF-AUDIT</span><b className={audit.complete ? "done" : "working"}>{audit.completeCount}/{audit.requiredCount}</b></header><div className="doctor-checks">{audit.checklist.map((check:any)=><div key={check.key} className={`doctor-check ${check.status.toLowerCase()}`}><i>{check.complete ? "✓" : check.status === "READY" ? "→" : "·"}</i><span><b>{check.label}</b><small>{check.complete ? check.evidenceProvider || "verified" : check.status === "READY" ? check.repairAction : `Waiting for ${check.provider}`}</small></span></div>)}</div>{audit.nextAction && <footer><small>NEXT REPAIR</small><b>{audit.nextAction.label}</b><p>{audit.nextAction.repairAction}</p></footer>}</section> }

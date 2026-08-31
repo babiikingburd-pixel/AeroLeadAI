@@ -1,5 +1,6 @@
 import { supabaseServer } from "@/lib/supabaseServer";
 import OversightConsole from "@/components/oversight/OversightConsole";
+import { auditProperty } from "@/lib/oversight/doctor";
 import "./oversight.css";
 export const dynamic = "force-dynamic";
 
@@ -26,5 +27,8 @@ export default async function OversightPage() {
         : row);
     }
   }
-  return <OversightConsole initial={{ profiles: profiles.data || [], evidence: hydratedEvidence, rings: rings.data || [], connectionError: error?.message || null }} />;
+  const evidenceByParcel = new Map<string, any[]>();
+  for (const row of hydratedEvidence) evidenceByParcel.set(row.parcel_id, [...(evidenceByParcel.get(row.parcel_id) || []), row]);
+  const audits = Object.fromEntries((profiles.data || []).map((profile: any) => [profile.parcel_id, auditProperty(profile, evidenceByParcel.get(profile.parcel_id) || [])]));
+  return <OversightConsole initial={{ profiles: profiles.data || [], evidence: hydratedEvidence, rings: rings.data || [], audits, connectionError: error?.message || null }} />;
 }

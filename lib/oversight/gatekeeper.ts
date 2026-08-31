@@ -36,11 +36,26 @@ export function evaluateEvidence(records: EvidenceRecord[]): GateDecision {
 
   if (corroborations.length) opportunity *= 1.12;
   const evidenceConfidence = usable.length ? usable.reduce((sum, r) => sum + r.confidence, 0) / usable.length : 0;
-  const completionPct = Math.round((types.size / 4) * 100);
+  const latestStructure = structure[0]?.payload as any;
+  const latestImagery = imagery[0]?.payload as any;
+  const analysisStatus = String(latestImagery?.damage_analysis_status ?? latestImagery?.analysis_status ?? "").toLowerCase();
+  const completionChecks = [
+    Boolean(structure.length),
+    Number.isFinite(Number(latestStructure?.year_built ?? latestStructure?.yearBuilt ?? latestStructure?.effective_year_built)),
+    Boolean(latestStructure?.property_type ?? latestStructure?.dwelling_type ?? latestStructure?.use_type),
+    Boolean(imagery.length && latestImagery?.storage_path),
+    Boolean(imagery.length && (latestImagery?.capture_date || imagery[0]?.effectiveAt)),
+    ["complete", "completed", "analyzed", "reviewed"].includes(analysisStatus),
+    Boolean(permits.length),
+    Boolean(weather.length),
+  ];
+  const completionPct = Math.round((completionChecks.filter(Boolean).length / completionChecks.length) * 100);
   opportunity = Math.round(Math.max(0, Math.min(100, opportunity)));
   const allowed = evidenceConfidence >= 0.65 && types.size >= 2 && contradictions.length === 0 && opportunity >= 35;
-  const state = contradictions.length ? "REVIEW_REQUIRED" : types.size >= 4 && allowed ? "PROFILE_COMPLETE" : allowed ? "EVIDENCE_VERIFIED" : "EVIDENCE_PARTIAL";
+  const doctorComplete = completionChecks.every(Boolean);
+  const state = contradictions.length ? "REVIEW_REQUIRED" : doctorComplete && allowed ? "PROFILE_COMPLETE" : allowed ? "EVIDENCE_VERIFIED" : "EVIDENCE_PARTIAL";
   const deepDiveTier = opportunity >= 80 && evidenceConfidence >= 0.8 ? "TOP_100" : opportunity >= 55 ? "TOP_500" : "STANDARD";
   if (!usable.length) reasons.push("No real evidence is currently available");
+  else if (!doctorComplete) reasons.push("Oversight Doctor reports required evidence is still missing");
   return { allowed, state, reasons, contradictions, corroborations, opportunity, evidenceConfidence: Number(evidenceConfidence.toFixed(3)), commercialPriority: Math.round(opportunity * evidenceConfidence), completionPct, deepDiveTier };
 }
