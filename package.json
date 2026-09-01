@@ -15,7 +15,8 @@
     "apex:13-audit": "node scripts/apex13-max-audit.mjs",
     "apex:14.1-network-audit": "node scripts/apex141-top500-network-audit.mjs",
     "apex:15-audit": "node scripts/apex15-max-audit.mjs",
-    "lite:audit": "node scripts/lite-edge-audit.mjs"
+    "lite:audit": "node scripts/lite-edge-audit.mjs",
+    "salvage:old-db": "node scripts/old-db-salvage-priority.mjs"
   },
   "dependencies": {
     "next": "^14.2.35",
