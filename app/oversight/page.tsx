@@ -7,8 +7,9 @@ export const dynamic = "force-dynamic";
 export default async function OversightPage() {
   const db = supabaseServer();
   if (!db) return <OversightConsole initial={{ profiles: [], evidence: [], rings: [], connectionError: "Supabase is not configured" }} />;
+  await db.rpc("refresh_oversight_leaderboard");
   const [profiles, evidence, rings] = await Promise.all([
-    db.from("roof_profiles").select("*").order("commercial_priority", { ascending: false }).limit(500),
+    db.from("roof_profiles").select("*").order("live_rank", { ascending: true, nullsFirst: false }).order("rank_score", { ascending: false }).limit(500),
     db.from("evidence_records").select("*").order("captured_at", { ascending: false }).limit(2500),
     db.from("ring_status").select("*").order("ring_id"),
   ]);
