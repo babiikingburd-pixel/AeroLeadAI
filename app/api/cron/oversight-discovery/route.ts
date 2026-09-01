@@ -15,8 +15,17 @@ export async function GET(request: NextRequest) {
   const db = supabaseServer();
   if (!db) return NextResponse.json({ ok: false, error: "supabase_not_configured" }, { status: 503 });
   try {
-    const result = await runSouthernFrontDiscovery(db, { perCity: 8, censusPerCity: 4 });
-    return NextResponse.json({ ok: true, ...result });
+    // Hourly discovery is intentionally bounded: four fresh parcels per city,
+    // with every imported parcel sent through Census identity verification.
+    // This increases intake without dumping avoidable identity repairs on Doctor.
+    const result = await runSouthernFrontDiscovery(db, { perCity: 4, censusPerCity: 4 });
+    return NextResponse.json({
+      ok: true,
+      cadence: "hourly",
+      maxNewPerRun: 12,
+      identityVerification: "census_all_selected",
+      ...result,
+    });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "discovery_failed" }, { status: 500 });
   }
