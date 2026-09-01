@@ -28,7 +28,7 @@ function allowRate(key, limit) {
 }
 
 function isPublicPath(pathname) {
-  return PUBLIC_EXACT.has(pathname) || pathname.startsWith("/portal/") || pathname === "/api/portal-chat";
+  return PUBLIC_EXACT.has(pathname) || pathname.startsWith("/api/oversight/crawlers/") || pathname.startsWith("/portal/") || pathname === "/api/portal-chat";
 }
 
 function requestIp(request) {
