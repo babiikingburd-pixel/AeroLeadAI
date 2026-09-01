@@ -1,12 +1,14 @@
 import type { EvidenceProvider, ParcelContext } from "../contracts";
 import { makeEvidence } from "../evidence";
 import { HttpJsonEvidenceProvider } from "./httpJson";
+import { UspsAddressEvidenceProvider } from "./usps";
 
 const rows = (body: unknown): Record<string, unknown>[] => Array.isArray(body) ? body as Record<string, unknown>[] : Array.isArray((body as any)?.results) ? (body as any).results : body && typeof body === "object" ? [body as Record<string, unknown>] : [];
 const dateValue = (row: Record<string, unknown>, keys: string[]) => keys.map(k => row[k]).find(v => typeof v === "string") as string | undefined;
 
 export function createEvidenceProviders(): EvidenceProvider[] {
   return [
+    new UspsAddressEvidenceProvider(),
     new HttpJsonEvidenceProvider("assessor", "STRUCTURE", process.env.OVERSIGHT_ASSESSOR_URL_TEMPLATE, (body, parcel, sourceRef) => rows(body).map(row => makeEvidence({
       parcelId: parcel.parcelId, type: "STRUCTURE", provider: "assessor", reality: "REAL_NOW", sourceRef,
       confidence: Number(row.confidence ?? 0.9), effectiveAt: dateValue(row, ["updated_at", "effective_at"]), payload: row,
