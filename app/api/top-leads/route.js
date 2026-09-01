@@ -38,13 +38,18 @@ function rankRows(rows){
     const legacyPriorityScore=Number(scored.priorityScore??raw.priority_score??0);
     const row={...raw,...scored,legacyPriorityScore,singleFamilySignal:singleFamilySignal(raw)};
     const key=addressKey(row)||String(row.id),prior=best.get(key);
-    if(!prior||legacyPriorityScore>prior.legacyPriorityScore)best.set(key,row);
+    if(!prior||Number(row.aeroLeadScore||0)>Number(prior.aeroLeadScore||0))best.set(key,row);
   }
-  return rankEvidenceTwins([...best.values()]).map((row)=>({
+  const twins=rankEvidenceTwins([...best.values()]).map((row)=>({
     ...row,
-    priorityScore:Number(row.evidenceTwin.rankScore||0),
-    confidenceScore:Number(row.evidenceTwin.evidenceConfidence||0),
+    evidenceTwinPriorityScore:Number(row.evidenceTwin.rankScore||0),
+    evidenceTwinConfidenceScore:Number(row.evidenceTwin.evidenceConfidence||0),
   }));
+  return twins.sort((a,b)=>
+    Number(b.aeroLeadScore||0)-Number(a.aeroLeadScore||0) ||
+    Number(b.evidenceTwinPriorityScore||0)-Number(a.evidenceTwinPriorityScore||0) ||
+    Number(b.legacyPriorityScore||0)-Number(a.legacyPriorityScore||0)
+  ).map((row,index)=>({...row,aeroLeadRank:index+1}));
 }
 
 async function fetchCandidateRows(supabase){
@@ -84,12 +89,14 @@ export async function GET(req){
     const permit=permitSummary(r);
     const yearBuilt=Number(r.year_built)||null;
     return {
-      id:r.id,rank:r.liteRank||i+1,address:r.address,city:r.city,county:r.county,lat:r.lat,lon:r.lon,
+      id:r.id,rank:r.aeroLeadRank||i+1,address:r.address,city:r.city,county:r.county,lat:r.lat,lon:r.lon,
       propertyClass:r.property_class||null,singleFamilySignal:r.singleFamilySignal||0,
       yearBuilt,propertyAgeYears:yearBuilt?Math.max(0,currentYear-yearBuilt):null,
       assessedValue:r.assessed_value,permit,
-      evidenceScore:Number(r.evidenceScore??r.evidence_score??0),confidenceScore:Number(r.confidenceScore??r.confidence_score??0),priorityScore:Number(r.priorityScore??r.priority_score??0),
-      legacyPriorityScore:Number(r.legacyPriorityScore??r.priority_score??0),
+      aeroLeadScore:Number(r.aeroLeadScore||0),aeroLeadScoreVersion:r.aeroLeadScoreVersion,
+      aeroLeadScoreBreakdown:r.aeroLeadScoreBreakdown||{},aeroLeadMissingEvidence:r.aeroLeadMissingEvidence||[],
+      evidenceScore:Number(r.evidenceScore??r.evidence_score??0),confidenceScore:Number(r.confidenceScore??r.confidence_score??0),priorityScore:Number(r.legacyPriorityScore??r.priority_score??0),
+      evidenceTwinPriorityScore:Number(r.evidenceTwinPriorityScore||0),evidenceTwinConfidenceScore:Number(r.evidenceTwinConfidenceScore||0),
       scoringVersion:r.evidenceTwin?.version||EVIDENCE_TWIN_VERSION,
       opportunityScore:r.evidenceTwin?.opportunityScore??0,evidenceConfidence:r.evidenceTwin?.evidenceConfidence??0,contractorValueScore:r.evidenceTwin?.contractorValueScore??0,
       scoreStatus:r.evidenceTwin?.scoreStatus||"PROVISIONAL",gatekeeperClassification:r.evidenceTwin?.classification||"HOLD-FOR-VERIFICATION",
@@ -112,5 +119,5 @@ export async function GET(req){
     }
   }catch(e){console.warn(`[top-leads] image lookup failed: ${e.message}`)}
   for(const lead of top)if(!lead.imageUrl&&lead.lat!=null&&lead.lon!=null){lead.imageUrl=freeSatelliteFallback(Number(lead.lat),Number(lead.lon));lead.imageIsFallback=true}
-  return Response.json({ok:true,tier,cap:TIER_CAPS[tier],leads:top,total:top.length,scanned:rows.length,entered:ranked.length,top100Count:Math.min(100,ranked.length),top500Count:Math.min(500,ranked.length),liveScored:true,scoringVersion:EVIDENCE_TWIN_VERSION,deduped:true,residentialFiltered:true,singleFamilyPrioritized:true,scanPages:MAX_SCAN_PAGES,partialErrors});
+  return Response.json({ok:true,tier,cap:TIER_CAPS[tier],leads:top,total:top.length,scanned:rows.length,entered:ranked.length,top100Count:Math.min(100,ranked.length),top500Count:Math.min(500,ranked.length),liveScored:true,aeroLeadScoreVersion:top[0]?.aeroLeadScoreVersion||"aerolead-native-1.0",scoringVersion:EVIDENCE_TWIN_VERSION,deduped:true,residentialFiltered:true,singleFamilyPrioritized:true,scanPages:MAX_SCAN_PAGES,partialErrors});
 }
