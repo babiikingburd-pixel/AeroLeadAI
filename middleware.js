@@ -11,7 +11,7 @@ const ROUTE_LIMITS = {
   "/api/zip-scan": 10,
   "/api/crm-sync": 10,
 };
-const PUBLIC_EXACT = new Set(["/access", "/api/auth/access", "/api/auth/session", "/api/auth/logout", "/api/auth/gateway-check", "/api/oversight/pulse/permits"]);
+const PUBLIC_EXACT = new Set(["/access", "/api/auth/access", "/api/auth/session", "/api/auth/logout", "/api/auth/gateway-check", "/api/oversight/pulse/permits", "/api/oversight/pulse/repairs"]);
 const hits = new Map();
 
 function allowRate(key, limit) {
@@ -78,17 +78,10 @@ export async function middleware(request) {
   }
 
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json(
-      { error: configuration.configured ? "Unauthorized" : "Owner access protection is not configured." },
-      { status: configuration.configured ? 401 : 503 }
-    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const destination = request.nextUrl.clone();
-  destination.pathname = "/access";
-  destination.search = "";
-  destination.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
-  return NextResponse.redirect(destination);
+  return NextResponse.redirect(new URL("/access", request.url));
 }
 
 export const config = {
