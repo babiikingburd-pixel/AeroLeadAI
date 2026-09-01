@@ -1,0 +1,30 @@
+name: Package Source Snapshot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Build source snapshot
+        shell: bash
+        run: |
+          mkdir -p dist-source
+          git archive --format=zip --output="dist-source/AeroLeadAI-${GITHUB_SHA}.zip" HEAD
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: aeroleadai-source-${{ github.sha }}
+          path: dist-source/AeroLeadAI-${{ github.sha }}.zip
+          if-no-files-found: error
+          retention-days: 30
