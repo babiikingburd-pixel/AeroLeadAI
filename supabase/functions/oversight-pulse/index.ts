@@ -22,6 +22,15 @@ function safe(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 120);
 }
 
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const value = error as Record<string, unknown>;
+    return String(value.message || value.error || value.statusCode || JSON.stringify(value));
+  }
+  return String(error);
+}
+
 function coordinates(record: any) {
   const payload = record?.payload || {};
   const latitude = Number(payload.latitude ?? payload.lat);
@@ -145,16 +154,23 @@ Deno.serve(async () => {
   try {
     const candidates = await imageCandidates();
     result.imagery.attempted = candidates.length;
-    const settled = await Promise.allSettled(candidates.map(storeImage));
-    const completedIds = settled.filter((item): item is PromiseFulfilledResult<string> => item.status === "fulfilled").map((item) => item.value);
+    // Persist sequentially: each evidence write refreshes the parcel Doctor
+    // audit, so concurrent inserts create avoidable trigger contention.
+    const completedIds: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        completedIds.push(await storeImage(candidate));
+      } catch (error) {
+        result.imagery.failures.push(errorMessage(error));
+      }
+    }
     result.imagery.completed = completedIds.length;
-    result.imagery.failures = settled.filter((item): item is PromiseRejectedResult => item.status === "rejected").map((item) => item.reason instanceof Error ? item.reason.message : String(item.reason));
     result.permits = await runPermitBridge(completedIds);
     result.evaluation = "BYPASSED";
     await db.rpc("finish_oversight_pulse", { p_worker_id: workerId, p_result: result });
     return Response.json({ ok: true, ...result });
   } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
+    result.error = errorMessage(error);
     await db.rpc("finish_oversight_pulse", { p_worker_id: workerId, p_result: result });
     return Response.json({ ok: false, ...result }, { status: 500 });
   }
