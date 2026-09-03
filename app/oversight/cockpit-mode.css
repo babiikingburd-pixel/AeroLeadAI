@@ -1,0 +1,24 @@
+.ov-bypass {
+  height: 34px;
+  margin-top: 8px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-color: rgba(255, 154, 86, .24);
+  background: linear-gradient(90deg, rgba(255, 154, 86, .09), rgba(7, 15, 27, .68), rgba(95, 224, 255, .045));
+  font-size: 8px;
+  letter-spacing: .08em;
+}
+
+.ov-bypass span { color: var(--ov-amber); white-space: nowrap; }
+.ov-bypass span i { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--ov-amber); box-shadow: 0 0 9px var(--ov-amber); }
+.ov-bypass b { color: var(--ov-ice); font: 600 10px 'Chakra Petch'; letter-spacing: .12em; }
+.ov-bypass small { margin-left: auto; color: var(--ov-muted); font-size: 7px; }
+.gate-badge.paused { color: var(--ov-amber); background: rgba(255, 154, 86, .08); box-shadow: inset 0 0 20px rgba(255, 154, 86, .04); }
+.ov-deck { height: calc(100vh - 238px); }
+
+@media (max-width: 720px) {
+  .ov-bypass { height: auto; min-height: 42px; flex-wrap: wrap; gap: 5px 12px; padding: 8px 11px; }
+  .ov-bypass small { width: 100%; margin-left: 0; }
+}

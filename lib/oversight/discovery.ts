@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { makeEvidence } from "./evidence";
-import { evaluateEvidence } from "./gatekeeper";
 import { SupabaseEvidenceCache } from "./cache";
 
 const HENNEPIN = "https://gis.hennepin.us/arcgis/rest/services/HennepinData/LAND_PROPERTY/MapServer/1/query";
@@ -59,8 +58,7 @@ export async function runOversightDiscovery(db: SupabaseClient, options: { zip: 
       records.push(makeEvidence({ parcelId: parcel.parcelId, type: "PROPERTY", provider: "us_census_geocoder", reality: "REAL_NOW", confidence: .9, sourceRef: "https://geocoding.geo.census.gov/geocoder/", payload: census[index]! }));
     }
     await cache.persist(records);
-    const decision = evaluateEvidence(records);
-    const { error } = await db.from("roof_profiles").upsert({ parcel_id: parcel.parcelId, address: parcel.address, zip: parcel.zip, ring_id: `zip-${parcel.zip}-ring-0`, deployment_state: "evidence-collection", state: decision.state, gate_allowed: decision.allowed, gate_reasons: decision.reasons, opportunity: decision.opportunity, evidence_confidence: decision.evidenceConfidence, commercial_priority: decision.commercialPriority, contradictions: decision.contradictions, corroborations: decision.corroborations, completion_pct: decision.completionPct, deep_dive_tier: decision.deepDiveTier, updated_at: new Date().toISOString() }, { onConflict: "parcel_id" });
+    const { error } = await db.from("roof_profiles").upsert({ parcel_id: parcel.parcelId, address: parcel.address, zip: parcel.zip, ring_id: `zip-${parcel.zip}-ring-0`, deployment_state: "evidence-collection", updated_at: new Date().toISOString() }, { onConflict: "parcel_id" });
     if (error) throw new Error(`profile_write_failed: ${error.message}`);
   }
   const totalRetained = seen.size + selected.length;
@@ -69,4 +67,3 @@ export async function runOversightDiscovery(db: SupabaseClient, options: { zip: 
   if (ringError) throw new Error(`ring_write_failed: ${ringError.message}`);
   return { territory: options.zip, sourceCandidates: candidates.length, imported: selected.length, censusVerified: verified, retained: totalRetained, completionPct, nextRingUnlockPct: Number((completionPct / 10).toFixed(2)) };
 }
-

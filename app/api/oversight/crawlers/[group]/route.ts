@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { OversightPipeline } from "@/lib/oversight/pipeline";
-import { createEvidenceProvidersForGroup, crawlerGroupEngines, type CrawlerGroup } from "@/lib/oversight/providerGroups";
+import { createEvidenceProvidersForEngine, crawlerGroupEngines, type CrawlerGroup } from "@/lib/oversight/providerGroups";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -76,7 +76,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const profileByParcel = new Map((profiles || []).map((row: any) => [row.parcel_id, row]));
   const structureByParcel = new Map<string, any>();
   for (const row of structures || []) if (!structureByParcel.has(row.parcel_id)) structureByParcel.set(row.parcel_id, row.payload || {});
-  const providers = createEvidenceProvidersForGroup(group);
   const run = await db.from("oversight_crawler_runs").insert({ worker_group: group, engine_type: `group_${group.toLowerCase()}`, metadata: { engines: crawlerGroupEngines(group), batchSize: BATCH_SIZE, parallelism: PARALLELISM } }).select("id").single();
   const results: any[] = [];
 
@@ -86,6 +85,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     await db.from("oversight_crawler_jobs").update({ status: "RUNNING", locked_at: new Date().toISOString(), locked_by: `group-${group}`, updated_at: new Date().toISOString() }).eq("id", job.id);
     const structure = structureByParcel.get(job.parcel_id) || {};
     try {
+      const providers = createEvidenceProvidersForEngine(job.engine_type);
+      if (!providers.length) {
+        const attempts = Number(job.attempts || 0) + 1;
+        await db.from("oversight_crawler_jobs").update({ status: "RETRY", attempts, last_error: "handled_by_imagery_pulse", next_attempt_at: new Date(Date.now() + 6 * 60 * 60_000).toISOString(), locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq("id", job.id);
+        return { jobId: job.id, parcelId: job.parcel_id, requirement: job.requirement, deferred: "imagery_pulse" };
+      }
       const result = await new OversightPipeline(db, providers).run({ parcelId: profile.parcel_id, address: profile.address, zip: profile.zip || structure.zip || undefined, state: "MN", county: String(structure.county || ""), ...coords(structure) });
       const satisfied = requirementSatisfied(job.requirement, result.evidence);
       const attempts = Number(job.attempts || 0) + 1;
@@ -103,7 +108,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 
   for (let i = 0; i < chosen.length; i += PARALLELISM) results.push(...await Promise.all(chosen.slice(i, i + PARALLELISM).map(execute)));
-  await db.rpc("refresh_oversight_leaderboard");
   if (run.data?.id) await db.from("oversight_crawler_runs").update({ finished_at: new Date().toISOString(), attempted: results.length, succeeded: results.filter(x => x.satisfied).length, failed: results.filter(x => x.error).length }).eq("id", run.data.id);
   return NextResponse.json({ ok: true, group, engines: crawlerGroupEngines(group), attempted: results.length, satisfied: results.filter(x => x.satisfied).length, results });
 }

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { EvidenceReality, EvidenceRecord, EvidenceType } from "./contracts";
 
 function stable(value: unknown): string {
@@ -15,9 +15,19 @@ export function makeEvidence(input: {
 }): EvidenceRecord {
   const capturedAt = new Date().toISOString();
   const payload = input.payload || {};
-  const contentHash = createHash("sha256").update(stable({ ...input, payload, capturedAt })).digest("hex");
+  // Evidence identity is content-addressed. Retries refresh a record instead of
+  // creating a new row simply because the collection timestamp changed.
+  const contentHash = createHash("sha256").update(stable({
+    parcelId: input.parcelId,
+    type: input.type,
+    provider: input.provider,
+    reality: input.reality,
+    effectiveAt: input.effectiveAt || null,
+    sourceRef: input.sourceRef || null,
+    payload,
+  })).digest("hex");
   return {
-    id: randomUUID(), parcelId: input.parcelId, type: input.type, provider: input.provider,
+    id: `${input.type.toLowerCase()}:${contentHash}`, parcelId: input.parcelId, type: input.type, provider: input.provider,
     reality: input.reality, capturedAt, effectiveAt: input.effectiveAt, sourceRef: input.sourceRef,
     confidence: Math.max(0, Math.min(1, input.confidence ?? 0)), payload, contentHash,
   };

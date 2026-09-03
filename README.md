@@ -202,6 +202,24 @@ dependent pieces (escrow, contractor subscriptions) stay at
 6. **Enterprise & Developer Platform** (`/enterprise`) — organizations (municipalities, property managers, HOAs, insurers) manage a portfolio of properties and get a spend/open-jobs/flagged-jobs report; scoped API keys (`lib/platformApi.js`) gate a public read endpoint (`GET /api/v1/properties/:id`) to one organization's data.
 7. **Financial reporting** (`lib/financial/financialServices.js`, surfaced on `/enterprise`) — real platform-wide revenue/job-count reporting from the `jobs` table today; escrow, contractor subscriptions, and customer financing are honest `{available:false}` stubs until `STRIPE_SECRET_KEY`/`FINANCING_PARTNER_API_KEY` exist (the real Stripe call shape is commented inline for when they do).
 
+## Oversight collection-only flight mode
+
+The `/oversight` system is temporarily isolated from GateKeeper evaluation.
+Evidence providers, the persistent cache, Doctor audit checklist, imagery
+capture, permit collection, and discovery remain active. Scores, ranks, and
+publication stay frozen until evaluation is deliberately re-enabled. Neither
+`lib/oversight/gatekeeper.ts` nor `lib/gatekeeper16.js` is modified by this mode.
+
+Operational safeguards in this release:
+
+- evidence IDs are content-addressed so retries update instead of duplicating;
+- crawler jobs invoke only the provider required by their engine;
+- imagery acquisition is owned by the Supabase pulse and no longer duplicated
+  by the generic crawler;
+- imagery candidate reads ignore placeholder evidence and select real
+  coordinate-bearing records from a larger candidate pool;
+- crawler queue/run tables are RLS-locked to `service_role`.
+
 ## v6 upgrade (AI Executive Engine — Boardroom)
 
 No new SQL beyond `supabase_phase2_schema.sql` above (it already includes

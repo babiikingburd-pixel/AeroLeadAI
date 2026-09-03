@@ -19,8 +19,8 @@ export class SupabaseEvidenceCache {
     const { error } = await this.db.from("evidence_records").upsert(records.map(toRow), { onConflict: "id" });
     if (error) throw new Error(`evidence_cache_write_failed: ${error.message}`);
   }
-  async list(parcelId: string) {
-    const { data, error } = await this.db.from("evidence_records").select("*").eq("parcel_id", parcelId).order("captured_at", { ascending: false });
+  async list(parcelId: string, limit = 500) {
+    const { data, error } = await this.db.from("evidence_records").select("*").eq("parcel_id", parcelId).order("captured_at", { ascending: false }).limit(limit);
     if (error) throw new Error(`evidence_cache_read_failed: ${error.message}`);
     return (data || []).map(fromRow);
   }

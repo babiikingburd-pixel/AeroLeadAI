@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { SupabaseEvidenceCache } from "@/lib/oversight/cache";
 import { makeEvidence } from "@/lib/oversight/evidence";
-import { evaluateEvidence } from "@/lib/oversight/gatekeeper";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -55,44 +54,6 @@ async function shovelsLookup(address: string, apiKey: string) {
   if (!permits.ok) throw new Error(`shovels_permits_http_${permits.status}`);
   const permitBody = await permits.json();
   return Array.isArray(permitBody) ? permitBody : permitBody?.items || permitBody?.results || permitBody?.data || [];
-}
-
-async function recalculate(db: any, parcelId: string) {
-  const cache = new SupabaseEvidenceCache(db);
-  const evidence = await cache.list(parcelId);
-  const decision = evaluateEvidence(evidence);
-  const { data: profile, error: profileReadError } = await db.from("roof_profiles").select("address,zip").eq("parcel_id", parcelId).maybeSingle();
-  if (profileReadError || !profile) throw new Error(profileReadError?.message || "profile_not_found");
-  const { error } = await db.from("roof_profiles").update({
-    state: decision.state,
-    gate_allowed: decision.allowed,
-    gate_reasons: decision.reasons,
-    opportunity: decision.opportunity,
-    evidence_confidence: decision.evidenceConfidence,
-    commercial_priority: decision.commercialPriority,
-    contradictions: decision.contradictions,
-    corroborations: decision.corroborations,
-    completion_pct: decision.completionPct,
-    deep_dive_tier: decision.deepDiveTier,
-    updated_at: new Date().toISOString(),
-  }).eq("parcel_id", parcelId);
-  if (error) throw error;
-  if (decision.allowed) {
-    const { error: publishError } = await db.from("published_summary").upsert({
-      parcel_id: parcelId,
-      address: profile.address,
-      opportunity: decision.opportunity,
-      evidence_confidence: decision.evidenceConfidence,
-      commercial_priority: decision.commercialPriority,
-      deep_dive_tier: decision.deepDiveTier,
-      completion_pct: decision.completionPct,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "parcel_id" });
-    if (publishError) throw publishError;
-  } else {
-    await db.from("published_summary").delete().eq("parcel_id", parcelId);
-  }
-  return decision;
 }
 
 export async function POST(request: NextRequest) {
@@ -176,29 +137,20 @@ export async function POST(request: NextRequest) {
             payload: { records: [], search_result: "no_matching_roofing_permits", searched_address: fullAddress, searched_at: new Date().toISOString() },
           })]);
         }
-        const decision = await recalculate(db, profile.parcel_id);
-        results.push({ parcelId: profile.parcel_id, permits: permits.length, state: decision.state });
+        results.push({ parcelId: profile.parcel_id, permits: permits.length, evaluation: "BYPASSED" });
       } catch (error) {
         results.push({ parcelId: profile.parcel_id, error: error instanceof Error ? error.message : "permit_search_failed" });
       }
     }
   }
 
-  const recalculated = [];
-  for (const parcelId of imageryParcelIds) {
-    try {
-      const decision = await recalculate(db, parcelId);
-      recalculated.push({ parcelId, state: decision.state, completionPct: decision.completionPct });
-    } catch (error) {
-      recalculated.push({ parcelId, error: error instanceof Error ? error.message : "recalculation_failed" });
-    }
-  }
   await db.from("oversight_pulse_tokens").delete().lt("expires_at", new Date(Date.now() - 86400000).toISOString());
   return NextResponse.json({
     ok: true,
     providerConfigured: Boolean(permitApiKey),
     permitCandidates: candidates.length,
     permitResults: results,
-    imageryProfilesRecalculated: recalculated,
+    imageryProfilesRecalculated: [],
+    evaluation: "BYPASSED",
   });
 }

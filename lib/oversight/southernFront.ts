@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SupabaseEvidenceCache } from "./cache";
 import { makeEvidence } from "./evidence";
-import { evaluateEvidence } from "./gatekeeper";
 
 const DAKOTA_LAYER = "https://gis2.co.dakota.mn.us/arcgis/rest/services/Secure/DCGIS_OL_PropertyInformation/MapServer/4";
 const DAKOTA_PROXY = "https://gis.co.dakota.mn.us/Proxy/proxy.ashx?";
@@ -60,8 +59,7 @@ export async function runSouthernFrontDiscovery(db: SupabaseClient, options = { 
       const records = [makeEvidence({ parcelId: parcel.parcelId, type: "STRUCTURE", provider: "dakota_county_property_information", reality: "REAL_NOW", confidence: .95, sourceRef: DAKOTA_LAYER, payload: { address: parcel.address, city: parcel.city, latitude: parcel.latitude, longitude: parcel.longitude, year_built: parcel.yearBuilt, effective_year_built: parcel.effectiveYearBuilt, assessed_value: parcel.assessedValue, dwelling_type: "S.FAM.RES" } })];
       if (match) { verified++; records.push(makeEvidence({ parcelId: parcel.parcelId, type: "PROPERTY", provider: "us_census_geocoder", reality: "REAL_NOW", confidence: .9, sourceRef: "https://geocoding.geo.census.gov/geocoder/", payload: match })); }
       await cache.persist(records);
-      const decision = evaluateEvidence(records);
-      const { error } = await db.from("roof_profiles").upsert({ parcel_id: parcel.parcelId, address: `${parcel.address}, ${parcel.city}, MN`, zip: match?.zip || null, ring_id: `south-${slug(city)}-front-1`, deployment_state: "evidence-collection", state: decision.state, gate_allowed: decision.allowed, gate_reasons: decision.reasons, opportunity: decision.opportunity, evidence_confidence: decision.evidenceConfidence, commercial_priority: decision.commercialPriority, contradictions: decision.contradictions, corroborations: decision.corroborations, completion_pct: decision.completionPct, deep_dive_tier: decision.deepDiveTier, updated_at: new Date().toISOString() }, { onConflict: "parcel_id" });
+      const { error } = await db.from("roof_profiles").upsert({ parcel_id: parcel.parcelId, address: `${parcel.address}, ${parcel.city}, MN`, zip: match?.zip || null, ring_id: `south-${slug(city)}-front-1`, deployment_state: "evidence-collection", updated_at: new Date().toISOString() }, { onConflict: "parcel_id" });
       if (error) throw new Error(`southern_profile_write_failed: ${error.message}`);
       seen.add(parcel.parcelId);
     }

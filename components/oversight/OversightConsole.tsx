@@ -32,9 +32,11 @@ export default function OversightConsole({ initial }: { initial: any }) {
     <div className="ov-grid" /><div className="ov-vignette" />
     <header className="ov-top glass">
       <div className="ov-brand"><span className="ov-mark" />AEROLEAD <b>OVERSIGHT</b><small>PROPERTY EVIDENCE COMMAND</small></div>
-      <div className="ov-mission"><span>MISSION</span> Evidence first · every score inspectable</div>
-      <div className="ov-health"><i className={initial.connectionError ? "bad" : "good"} />{initial.connectionError ? "DATA LINK DEGRADED" : "AUTONOMOUS SYSTEM ONLINE"}</div>
+      <div className="ov-mission"><span>MISSION</span> Evidence collection live · evaluation isolated</div>
+      <div className="ov-health"><i className={initial.connectionError ? "bad" : "good"} />{initial.connectionError ? "DATA LINK DEGRADED" : "COLLECTION SYSTEM ONLINE"}</div>
     </header>
+
+    <div className="ov-bypass glass"><span><i /> COLLECTION-ONLY FLIGHT MODE</span><b>GATEKEEPER EVALUATION PAUSED</b><small>Scores and ranks remain frozen while providers acquire and persist evidence.</small></div>
 
     <section className="ov-stats">
       <Stat label="Profiles" value={initial.profiles.length} />
@@ -63,7 +65,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
       <section className="ov-focus glass">
         <div className="focus-head">
           <div><small>ACTIVE PROPERTY · CLICK EVIDENCE TO TRACE SOURCE</small><h1>{active?.address || "Awaiting verified property"}</h1><p>{active ? `${active.parcel_id} · ${active.zip || "ZIP pending"} · live rank #${active.live_rank || "—"}` : "The pipeline is ready; no sample property has been inserted."}</p></div>
-          <div className={`gate-badge ${active?.doctor_gate_status === "CERTIFIED" || active?.gate_allowed ? "pass" : active?.doctor_gate_status === "ELIGIBLE" ? "review" : "hold"}`}><small>DOCTOR GATEKEEPER</small>{active?.doctor_gate_status || (active?.gate_allowed ? "VERIFIED" : "HOLD")}</div>
+          <div className="gate-badge paused"><small>EVALUATION</small>PAUSED</div>
         </div>
 
         <ScoreBoard profile={active} audit={audit} />
@@ -88,7 +90,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
       </aside>
     </section>
 
-    <footer className="ov-telemetry glass"><span><i className="good"/> EVIDENCE CACHE PERSISTENT</span><span><i className="good"/> RLS ENFORCED</span><span><i className={initial.connectionError ? "bad" : "good"}/> SUPABASE {initial.connectionError ? "DEGRADED" : "CONNECTED"}</span><span className="push">SCORE ≠ CLAIM · OPEN EVERY SOURCE</span></footer>
+    <footer className="ov-telemetry glass"><span><i className="good"/> EVIDENCE CACHE PERSISTENT</span><span><i className="good"/> RLS ENFORCED</span><span><i className={initial.connectionError ? "bad" : "good"}/> SUPABASE {initial.connectionError ? "DEGRADED" : "CONNECTED"}</span><span className="push">COLLECT → INSPECT → EVALUATE LATER</span></footer>
     {openEvidence && <EvidenceDrawer record={openEvidence} onClose={() => setOpenEvidence(null)} />}
   </main>
 }

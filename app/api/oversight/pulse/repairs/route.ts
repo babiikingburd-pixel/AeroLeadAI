@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
-import { createEvidenceProviders } from "@/lib/oversight/providers";
+import { createEvidenceProvidersForRequirement } from "@/lib/oversight/providerGroups";
 import { OversightPipeline } from "@/lib/oversight/pipeline";
 
 export const dynamic = "force-dynamic";
@@ -61,13 +61,18 @@ export async function POST(request: NextRequest) {
   for (const row of structures || []) if (!structureByParcel.has(row.parcel_id)) structureByParcel.set(row.parcel_id, row.payload || {});
   const profileByParcel = new Map((profiles || []).map((p: any) => [p.parcel_id, p]));
 
-  const providers = createEvidenceProviders();
   const results: any[] = [];
   for (const task of chosen) {
     const profile: any = profileByParcel.get(task.parcel_id);
     if (!profile) continue;
     const structure = structureByParcel.get(task.parcel_id) || {};
     try {
+      const providers = createEvidenceProvidersForRequirement(task.requirement);
+      if (!providers.length) {
+        await db.from("oversight_audit_tasks").update({ last_error: "handled_by_imagery_pulse", next_attempt_at: new Date(Date.now() + 6 * 60 * 60_000).toISOString(), updated_at: new Date().toISOString() }).eq("parcel_id", task.parcel_id).eq("requirement", task.requirement);
+        results.push({ parcelId: task.parcel_id, requirement: task.requirement, deferred: "imagery_pulse" });
+        continue;
+      }
       const result = await new OversightPipeline(db, providers).run({
         parcelId: profile.parcel_id,
         address: profile.address,
@@ -77,7 +82,7 @@ export async function POST(request: NextRequest) {
         ...coords(structure),
       });
       await db.from("oversight_audit_tasks").update({ attempts: Number(task.attempts || 0) + 1, last_error: null, next_attempt_at: new Date(Date.now() + 30 * 60_000).toISOString(), updated_at: new Date().toISOString() }).eq("parcel_id", task.parcel_id).eq("requirement", task.requirement);
-      results.push({ parcelId: task.parcel_id, requirement: task.requirement, state: result.decision.state, providerFailures: result.providerFailures });
+      results.push({ parcelId: task.parcel_id, requirement: task.requirement, evaluation: result.evaluation, providerFailures: result.providerFailures });
     } catch (error) {
       const attempts = Number(task.attempts || 0) + 1;
       const delayMinutes = Math.min(1440, 15 * 2 ** Math.min(attempts, 6));
@@ -86,7 +91,6 @@ export async function POST(request: NextRequest) {
       results.push({ parcelId: task.parcel_id, requirement: task.requirement, error: message });
     }
   }
-  await db.rpc("refresh_oversight_leaderboard");
   const { count: remaining } = await db.from("oversight_audit_tasks").select("parcel_id", { count: "exact", head: true }).eq("status", "READY");
   return NextResponse.json({ ok: true, attempted: results.length, repaired: results.filter(x => !x.error).length, remaining: remaining || 0, results });
 }
