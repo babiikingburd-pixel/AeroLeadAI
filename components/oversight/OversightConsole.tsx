@@ -7,7 +7,7 @@ const clamp = (value: number) => Math.max(0, Math.min(100, Number.isFinite(value
 
 export default function OversightConsole({ initial }: { initial: any }) {
   const [selectedId, setSelectedId] = useState(initial.profiles[0]?.parcel_id || null);
-  const [mode, setMode] = useState<"TOP_20" | "TOP_100" | "TOP_500" | "ALL">("TOP_20");
+  const [mode, setMode] = useState<"TOP_20" | "TOP_100" | "TOP_500" | "ALL">("TOP_100");
   const [openEvidence, setOpenEvidence] = useState<any | null>(null);
 
   const profiles = useMemo(() => {
@@ -17,6 +17,14 @@ export default function OversightConsole({ initial }: { initial: any }) {
     if (mode === "TOP_500") return ranked.slice(0, 500);
     return ranked;
   }, [initial.profiles, mode]);
+
+  const imageryByParcel = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const record of initial.evidence) {
+      if (record.type === "IMAGERY" && record.payload?.image_url && !map.has(record.parcel_id)) map.set(record.parcel_id, record);
+    }
+    return map;
+  }, [initial.evidence]);
 
   const active = initial.profiles.find((p: any) => p.parcel_id === selectedId) || profiles[0] || null;
   const evidence = initial.evidence.filter((e: any) => e.parcel_id === active?.parcel_id);
@@ -54,11 +62,12 @@ export default function OversightConsole({ initial }: { initial: any }) {
         </div>
         <div className="queue-scroll">
           {!profiles.length && <Empty text="No fabricated leads. Properties appear only from collected evidence." />}
-          {profiles.map((p: any, index: number) => <button className={`lead-row ${active?.parcel_id === p.parcel_id ? "selected" : ""}`} onClick={() => setSelectedId(p.parcel_id)} key={p.parcel_id}>
+          {profiles.map((p: any, index: number) => { const image = imageryByParcel.get(p.parcel_id); return <button className={`lead-row ${active?.parcel_id === p.parcel_id ? "selected" : ""}`} onClick={() => setSelectedId(p.parcel_id)} key={p.parcel_id}>
             <span className={`rank ${scoreTone(Number(p.rank_score ?? p.opportunity))}`}>{String(Number(p.live_rank || index + 1)).padStart(2,"0")}</span>
+            <span className="lead-thumb">{image ? <img src={image.payload.image_url} alt="" /> : <i>NO IMAGE</i>}</span>
             <span className="lead-copy"><b>{p.address}</b><small>{p.doctor_gate_status || p.state?.replaceAll("_", " ")} · {Math.round(Number(p.evidence_confidence) * 100)}% confidence</small></span>
             <strong title="Live rank score">{Math.round(Number(p.rank_score ?? p.opportunity ?? 0))}</strong>
-          </button>)}
+          </button>})}
         </div>
       </aside>
 

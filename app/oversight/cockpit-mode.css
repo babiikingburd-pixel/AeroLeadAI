@@ -17,6 +17,11 @@
 .ov-bypass small { margin-left: auto; color: var(--ov-muted); font-size: 7px; }
 .gate-badge.paused { color: var(--ov-amber); background: rgba(255, 154, 86, .08); box-shadow: inset 0 0 20px rgba(255, 154, 86, .04); }
 .ov-deck { height: calc(100vh - 238px); }
+.lead-row { grid-template-columns: 28px 54px minmax(0, 1fr) 35px; }
+.lead-thumb { width: 54px; height: 42px; display: grid; place-items: center; overflow: hidden; border: 1px solid rgba(95, 224, 255, .2); border-radius: 5px; background: #02060c; }
+.lead-thumb img { width: 100%; height: 100%; object-fit: cover; transition: transform .2s ease; }
+.lead-row:hover .lead-thumb img, .lead-row.selected .lead-thumb img { transform: scale(1.08); }
+.lead-thumb i { color: var(--ov-muted); font-size: 6px; font-style: normal; }
 
 @media (max-width: 720px) {
   .ov-bypass { height: auto; min-height: 42px; flex-wrap: wrap; gap: 5px 12px; padding: 8px 11px; }
