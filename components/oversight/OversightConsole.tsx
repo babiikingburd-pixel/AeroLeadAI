@@ -8,15 +8,23 @@ const clamp = (value: number) => Math.max(0, Math.min(100, Number.isFinite(value
 export default function OversightConsole({ initial }: { initial: any }) {
   const [selectedId, setSelectedId] = useState(initial.profiles[0]?.parcel_id || null);
   const [mode, setMode] = useState<"TOP_20" | "TOP_100" | "TOP_500" | "ALL">("TOP_100");
+  const [query, setQuery] = useState("");
   const [openEvidence, setOpenEvidence] = useState<any | null>(null);
 
   const profiles = useMemo(() => {
     const ranked = [...initial.profiles].sort((a: any, b: any) => Number(a.live_rank ?? 999999) - Number(b.live_rank ?? 999999) || Number(b.rank_score ?? 0) - Number(a.rank_score ?? 0));
-    if (mode === "TOP_20") return ranked.filter((p: any) => Number(p.live_rank) > 0 && Number(p.live_rank) <= 20);
-    if (mode === "TOP_100") return ranked.filter((p: any) => Number(p.live_rank) > 0 && Number(p.live_rank) <= 100);
-    if (mode === "TOP_500") return ranked.slice(0, 500);
-    return ranked;
-  }, [initial.profiles, mode]);
+    const scoped = mode === "TOP_20"
+      ? ranked.filter((p: any) => Number(p.live_rank) > 0 && Number(p.live_rank) <= 20)
+      : mode === "TOP_100"
+        ? ranked.filter((p: any) => Number(p.live_rank) > 0 && Number(p.live_rank) <= 100)
+        : mode === "TOP_500"
+          ? ranked.slice(0, 500)
+          : ranked;
+    const needle = query.trim().toLowerCase();
+    if (!needle) return scoped;
+    return scoped.filter((p: any) => [p.address, p.parcel_id, p.zip, p.city]
+      .some(value => String(value || "").toLowerCase().includes(needle)));
+  }, [initial.profiles, mode, query]);
 
   const imageryByParcel = useMemo(() => {
     const map = new Map<string, any>();
@@ -27,6 +35,13 @@ export default function OversightConsole({ initial }: { initial: any }) {
   }, [initial.evidence]);
 
   const active = initial.profiles.find((p: any) => p.parcel_id === selectedId) || profiles[0] || null;
+  const activeIndex = profiles.findIndex((p: any) => p.parcel_id === active?.parcel_id);
+  const browse = (direction: -1 | 1) => {
+    if (!profiles.length) return;
+    const base = activeIndex >= 0 ? activeIndex : 0;
+    const next = Math.max(0, Math.min(profiles.length - 1, base + direction));
+    setSelectedId(profiles[next].parcel_id);
+  };
   const evidence = initial.evidence.filter((e: any) => e.parcel_id === active?.parcel_id);
   const type = (name: string) => evidence.filter((e: any) => e.type === name);
   const liveCount = initial.evidence.filter((e: any) => e.reality === "REAL_NOW" || e.reality === "CACHED_REAL").length;
@@ -59,6 +74,12 @@ export default function OversightConsole({ initial }: { initial: any }) {
         <div className="panel-head"><span>Ranked property deck</span><b>{profiles.length}</b></div>
         <div className="mode-tabs four">
           {(["TOP_20","TOP_100","TOP_500","ALL"] as const).map(x => <button key={x} className={mode === x ? "active" : ""} onClick={() => setMode(x)}>{x.replace("_", " ")}</button>)}
+        </div>
+        <label className="lead-search"><span>FIND A LEAD</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Address, ZIP or parcel" /></label>
+        <div className="browse-controls">
+          <button onClick={() => browse(-1)} disabled={!profiles.length || activeIndex <= 0}>‹ PREVIOUS</button>
+          <span>{profiles.length ? `${Math.max(1, activeIndex + 1)} / ${profiles.length}` : "0 / 0"}</span>
+          <button onClick={() => browse(1)} disabled={!profiles.length || activeIndex >= profiles.length - 1}>NEXT ›</button>
         </div>
         <div className="queue-scroll">
           {!profiles.length && <Empty text="No fabricated leads. Properties appear only from collected evidence." />}
