@@ -1,23 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/utils/supabase/server";
-import { refreshLiteLeaderboard } from "@/lib/lite/scoreRefresh.mjs";
-import { CEDAR_SPIRAL_SEED, seedCedarSpiral } from "@/lib/lite/minnesotaSpiralSeed.mjs";
+import { supabaseServer } from "@/lib/supabaseServer";
 
 export const dynamic = "force-dynamic";
 
-const LEADERBOARD_LIMIT = 500;
-const STABILITY_CYCLES = 2;
-
-// Vercel Cron sends GET requests with CRON_SECRET in the bearer token.
-// Fail closed when either the secret or the expected header is absent.
 function authorized(request: NextRequest): boolean {
   const expected = process.env.CRON_SECRET;
-
-  if (!expected) {
-    return false;
-  }
-
-  return request.headers.get("authorization") === `Bearer ${expected}`;
+  return Boolean(expected) && request.headers.get("authorization") === `Bearer ${expected}`;
 }
 
 function buildCycleId(): string {
@@ -27,109 +15,49 @@ function buildCycleId(): string {
 
 export async function GET(request: NextRequest) {
   const started = Date.now();
-
-  if (!authorized(request)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "unauthorized"
-      },
-      { status: 401 }
-    );
-  }
-
   const cycleId = buildCycleId();
 
+  if (!authorized(request)) {
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  const db = supabaseServer();
+  if (!db) {
+    return NextResponse.json({ ok: false, cycle_id: cycleId, error: "supabase_not_configured" }, { status: 503 });
+  }
+
   try {
-    const supabase = createServiceClient();
-    let data;
-    let engine = "lite_evidence_twin";
-    let spiralSeed = null;
+    const refresh = await db.rpc("refresh_oversight_leaderboard");
+    if (refresh.error) throw refresh.error;
 
-    try {
-      // Hobby runs once daily. Each pass resumes the deterministic spiral at
-      // 8600 Cedar Ave S and admits a small, verified single-family batch.
-      spiralSeed = await seedCedarSpiral(supabase, { limit: 100 });
-    } catch (seedError) {
-      // A source outage must not prevent already-retained properties from
-      // being re-ranked or their evidence work from continuing.
-      console.warn("Cedar spiral import unavailable; refreshing retained candidates", {
-        cycleId,
-        error: seedError instanceof Error ? seedError.message : String(seedError)
-      });
-    }
-
-    try {
-      // The V23 GateKeeper control-plane ideas now run before slot assignment:
-      // contradiction-first evidence, independent sources, reproducibility,
-      // and opportunity/confidence/value kept as separate scores.
-      data = await refreshLiteLeaderboard(supabase, { scanLimit: 1500 });
-
-      if (spiralSeed) {
-        const pruned = await supabase.rpc("lite_prune_spiral_candidates", {
-          p_seed_id: CEDAR_SPIRAL_SEED.id,
-          p_keep: LEADERBOARD_LIMIT
-        });
-        if (pruned.error) throw new Error(`Lite spiral retention failed: ${pruned.error.message}`);
-        data = { ...data, spiral_seed: spiralSeed, spiral_retention: pruned.data };
-      } else {
-        data = { ...data, spiral_seed: null };
-      }
-    } catch (liteError) {
-      // Safe rollout path for a deployment that lands moments before its
-      // matching migration. The legacy function remains service-role-only and
-      // keeps the Top 500 alive; the response clearly reports the fallback.
-      console.warn("Lite evidence-twin refresh unavailable; using APEX10 fallback", {
-        cycleId,
-        error: liteError instanceof Error ? liteError.message : String(liteError)
-      });
-      engine = "apex10_rebuild_leaderboard_fallback";
-      const fallback = await supabase.rpc("apex10_rebuild_leaderboard", {
-        p_cycle_id: cycleId,
-        p_limit: LEADERBOARD_LIMIT,
-        p_stability_cycles: STABILITY_CYCLES
-      });
-      if (fallback.error) throw fallback.error;
-      data = {
-        fallback: fallback.data,
-        lite_error: liteError instanceof Error ? liteError.message : String(liteError)
-      };
-    }
+    const [profiles, ranked] = await Promise.all([
+      db.from("roof_profiles").select("parcel_id", { count: "exact", head: true }),
+      db.from("roof_profiles").select("parcel_id", { count: "exact", head: true }).eq("leaderboard_eligible", true),
+    ]);
+    const countError = profiles.error || ranked.error;
+    if (countError) throw countError;
 
     const durationMs = Date.now() - started;
+    const result = {
+      profiles: profiles.count || 0,
+      ranked: ranked.count || 0,
+      top100: Math.min(100, ranked.count || 0),
+      top500: Math.min(500, ranked.count || 0),
+      gatekeeper: "BYPASSED_FOR_COLLECTION",
+    };
 
-    console.log("APEX leaderboard cron completed", {
-      cycleId,
-      durationMs,
-      result: data
-    });
-
+    console.log("Oversight collection leaderboard refreshed", { cycleId, durationMs, result });
     return NextResponse.json({
       ok: true,
-      engine,
+      engine: "oversight_collection_leaderboard",
       cycle_id: cycleId,
       duration_ms: durationMs,
-      result: data
+      result,
     });
   } catch (error) {
     const durationMs = Date.now() - started;
-    const message =
-      error instanceof Error ? error.message : "Unexpected leaderboard error";
-
-    console.error("APEX leaderboard cron crashed", {
-      cycleId,
-      error,
-      durationMs
-    });
-
-    return NextResponse.json(
-      {
-        ok: false,
-        cycle_id: cycleId,
-        error: message,
-        duration_ms: durationMs
-      },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : "Unexpected leaderboard error";
+    console.error("Oversight collection leaderboard cron crashed", { cycleId, error, durationMs });
+    return NextResponse.json({ ok: false, cycle_id: cycleId, error: message, duration_ms: durationMs }, { status: 500 });
   }
 }

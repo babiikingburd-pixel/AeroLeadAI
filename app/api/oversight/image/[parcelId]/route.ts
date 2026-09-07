@@ -23,6 +23,8 @@ export async function GET(_request: Request, { params }: { params: { parcelId: s
     .eq("parcel_id", parcelId)
     .eq("type", "IMAGERY")
     .in("reality", ["REAL_NOW", "CACHED_REAL"])
+    .not("payload->>storage_path", "is", null)
+    .neq("payload->>storage_path", "")
     .order("captured_at", { ascending: false })
     .limit(1)
     .maybeSingle();

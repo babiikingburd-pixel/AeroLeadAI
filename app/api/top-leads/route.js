@@ -1,123 +1,277 @@
 import { supabaseServer } from "../../../lib/supabaseServer";
-import { TC_COUNTIES, FAST_SCORE_FIELDS, scoreRow } from "../../../lib/twincities/fastCycle";
-import { rankEvidenceTwins, EVIDENCE_TWIN_VERSION } from "../../../lib/lite/evidenceTwin.mjs";
-import { signImageRows } from "../../../lib/imagery/privateStorage.mjs";
+import { loadOversightConsoleData } from "../../../lib/oversight/consoleData";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const TIER_CAPS = { review: 100, candidates: 500, contractor: 20 };
-const PAGE_SIZE = 1000;
-const MAX_SCAN_PAGES = 4;
+const SCORE_VERSION = "oversight-collection-1.0";
 
-function addressKey(r){return [r.address||"",r.city||"",r.county||""].join("|").toLowerCase().replace(/[^a-z0-9|]/g,"")}
-function looksLikeUnitAddress(addr=""){return /\b(apt|apartment|unit|suite|ste|#)\s*[a-z0-9-]+\b/i.test(String(addr))}
-function residentialEnough(r){
-  const cls=String(r.property_class||"").toLowerCase();
-  const addr=String(r.address||"").toLowerCase();
-  const blocked=["apartment","apartments","multifamily","multi-family","multi family","commercial","industrial","office","retail","hotel","school","church","condo building","duplex","triplex","fourplex","townhome complex"];
-  if(blocked.some(x=>cls.includes(x)||addr.includes(x))) return false;
-  if(looksLikeUnitAddress(addr)) return false;
-  return !!r.address && r.lat!=null && r.lon!=null;
+function clean(value) {
+  return String(value ?? "").trim();
 }
-function singleFamilySignal(r){
-  const cls=String(r.property_class||"").toLowerCase();
-  if(/\b(single[\s-]?family|sfr|detached|residential 1|one family|1 family)\b/i.test(cls)) return 2;
-  if(/\b(residential|homestead|house)\b/i.test(cls)) return 1;
-  return 0;
+
+function numberOrNull(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
-function freeSatelliteFallback(lat,lon){const d=.0012;return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon-d},${lat-d},${lon+d},${lat+d}&bboxSR=4326&imageSR=4326&size=900,900&format=jpg&f=image`}
-function streetViewUrl(r){
-  if(r.lat!=null&&r.lon!=null)return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${Number(r.lat)},${Number(r.lon)}`;
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${r.address||""}, ${r.city||""}, MN`)}`;
+
+function titleCase(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
-function rankRows(rows){
-  const best=new Map();
-  for(const raw of rows||[]){
-    if(!residentialEnough(raw))continue;
-    const scored=scoreRow(raw);
-    const legacyPriorityScore=Number(scored.priorityScore??raw.priority_score??0);
-    const row={...raw,...scored,legacyPriorityScore,singleFamilySignal:singleFamilySignal(raw)};
-    const key=addressKey(row)||String(row.id),prior=best.get(key);
-    if(!prior||Number(row.aeroLeadScore||0)>Number(prior.aeroLeadScore||0))best.set(key,row);
+
+function parseCity(address) {
+  const match = clean(address).match(/,\s*([^,]+),\s*MN(?:\s|,|$)/i);
+  return match ? titleCase(match[1]) : "";
+}
+
+function countyFor(profile, structure, permit) {
+  const explicit = structure?.county || permit?.address?.county;
+  if (explicit) return clean(explicit).toLowerCase();
+  const parcelPrefix = clean(profile.parcel_id).split("-")[0].toLowerCase();
+  if (["dakota", "hennepin", "ramsey", "scott", "carver", "anoka"].includes(parcelPrefix)) return parcelPrefix;
+  const ring = clean(profile.ring_id).toLowerCase();
+  return ["dakota", "hennepin", "ramsey", "scott", "carver", "anoka"].find((county) => ring.includes(county)) || parcelPrefix;
+}
+
+function evidenceIndex(rows) {
+  const indexed = new Map();
+  for (const row of rows || []) indexed.set(`${row.parcel_id}:${row.type}`, row);
+  return indexed;
+}
+
+function evidenceFor(indexed, parcelId, type) {
+  return indexed.get(`${parcelId}:${type}`) || null;
+}
+
+function isUsable(row) {
+  return Boolean(row && row.payload && !row.payload.reason);
+}
+
+function permitSummary(row) {
+  if (!isUsable(row)) {
+    return { status: "search_needed", count: 0, roofCount: 0, checkedAt: null, within10y: null };
   }
-  const twins=rankEvidenceTwins([...best.values()]).map((row)=>({
-    ...row,
-    evidenceTwinPriorityScore:Number(row.evidenceTwin.rankScore||0),
-    evidenceTwinConfidenceScore:Number(row.evidenceTwin.evidenceConfidence||0),
-  }));
-  return twins.sort((a,b)=>
-    Number(b.aeroLeadScore||0)-Number(a.aeroLeadScore||0) ||
-    Number(b.evidenceTwinPriorityScore||0)-Number(a.evidenceTwinPriorityScore||0) ||
-    Number(b.legacyPriorityScore||0)-Number(a.legacyPriorityScore||0)
-  ).map((row,index)=>({...row,aeroLeadRank:index+1}));
+
+  const payload = row.payload || {};
+  const records = Array.isArray(payload.records) ? payload.records : [payload];
+  const meaningful = records.filter((record) => record && (record.id || record.number || record.issue_date || record.description));
+  const roofRecords = meaningful.filter((record) =>
+    /roof|shingle|reroof|re-roof|roofing/i.test(
+      [record.description, record.type, record.subtype, ...(Array.isArray(record.tags) ? record.tags : [])].filter(Boolean).join(" ")
+    )
+  );
+  const issueDates = roofRecords
+    .map((record) => record.issue_date || record.file_date || record.start_date)
+    .filter(Boolean)
+    .map((value) => new Date(value))
+    .filter((date) => Number.isFinite(date.getTime()));
+  const tenYearsAgo = new Date();
+  tenYearsAgo.setUTCFullYear(tenYearsAgo.getUTCFullYear() - 10);
+
+  return {
+    status: meaningful.length ? "verified" : "none_found",
+    count: meaningful.length,
+    roofCount: roofRecords.length,
+    checkedAt: row.captured_at || null,
+    within10y: issueDates.length ? issueDates.some((date) => date >= tenYearsAgo) : meaningful.length ? false : null,
+  };
 }
 
-async function fetchCandidateRows(supabase){
-  const pages=Array.from({length:MAX_SCAN_PAGES},(_,page)=>{
-    const from=page*PAGE_SIZE,to=from+PAGE_SIZE-1;
-    return supabase.from("batch_leads").select(FAST_SCORE_FIELDS)
-      .in("county",TC_COUNTIES).eq("sales_status","new").neq("review_status","rejected")
-      .order("priority_score",{ascending:false,nullsFirst:false})
-      .range(from,to);
-  });
-  const settled=await Promise.all(pages);
-  const rows=[];const errors=[];
-  for(const r of settled){if(r.error)errors.push(r.error.message);else rows.push(...(r.data||[]))}
-  if(!rows.length&&errors.length)throw new Error(errors.join(" | "));
-  return {rows,partialErrors:errors};
+function streetViewUrl(lat, lon, address) {
+  if (lat != null && lon != null) {
+    return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${Number(lat)},${Number(lon)}`;
+  }
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 }
 
-function permitSummary(r){
-  let notes={};
-  try{notes=typeof r.permit_notes==="string"?JSON.parse(r.permit_notes):(r.permit_notes||{})}catch{}
-  const count=Number(r.permit_history_count??notes.records??notes.total_permits??0)||0;
-  const roofCount=Number(notes.roof_permits??notes.recent_roof_permits??0)||0;
-  const status=r.permit_evidence_status||"unknown";
-  return {status,count,roofCount,checkedAt:r.permit_checked_at||notes.checked_at||null,within10y:r.permit_within_10y??null};
+function mapLead(profile, indexed, fallbackRank) {
+  const parcelId = profile.parcel_id;
+  const structureRow = evidenceFor(indexed, parcelId, "STRUCTURE");
+  const propertyRow = evidenceFor(indexed, parcelId, "PROPERTY");
+  const permitRow = evidenceFor(indexed, parcelId, "PERMIT");
+  const weatherRow = evidenceFor(indexed, parcelId, "WEATHER");
+  const imageryRow = evidenceFor(indexed, parcelId, "IMAGERY");
+  const structure = isUsable(structureRow) ? structureRow.payload : {};
+  const property = isUsable(propertyRow) ? propertyRow.payload : {};
+  const permitPayload = isUsable(permitRow) ? permitRow.payload : {};
+  const imagery = isUsable(imageryRow) ? imageryRow.payload : {};
+  const permit = permitSummary(permitRow);
+  const yearBuilt = numberOrNull(structure.year_built ?? structure.yearBuilt ?? structure.effective_year_built);
+  const assessedValue = numberOrNull(
+    structure.assessed_value ??
+    structure.market_value ??
+    structure.total_value ??
+    permitPayload.property_assess_market_value
+  );
+  const lat = numberOrNull(structure.latitude ?? property.latitude ?? imagery.latitude);
+  const lon = numberOrNull(structure.longitude ?? property.longitude ?? imagery.longitude);
+  const city = titleCase(structure.city || permitPayload?.address?.city || parseCity(profile.address));
+  const county = countyFor(profile, structure, permitPayload);
+  const streetAddress = clean(structure.address) || clean(profile.address).split(",")[0];
+  const propertyClass = clean(
+    structure.property_type ||
+    structure.dwelling_type ||
+    structure.use_type ||
+    structure.use_code ||
+    permitPayload.property_type_detail ||
+    permitPayload.property_type
+  ) || "Residential candidate";
+  const assessorComplete = isUsable(structureRow) && lat != null && lon != null;
+  const imageryComplete = Boolean(imagery.storage_path && imagery.image_url);
+  const permitComplete = isUsable(permitRow);
+  const weatherComplete = isUsable(weatherRow);
+  const confidenceScore = Math.round(Number(profile.evidence_confidence || 0) * 100);
+  const completion = Math.round(Number(profile.completion_pct || 0));
+  const priorityScore = Number(Number(profile.rank_score || profile.commercial_priority || 0).toFixed(2));
+  const missing = [
+    !permitComplete && "permit history",
+    !weatherComplete && "storm/weather",
+    !assessorComplete && "assessor/geolocation",
+    !imageryComplete && "stored property imagery",
+  ].filter(Boolean);
+  const rank = Number(profile.live_rank) || fallbackRank;
+  const currentYear = new Date().getUTCFullYear();
+  const fullAddress = [streetAddress, city, "MN", profile.zip].filter(Boolean).join(", ");
+
+  return {
+    id: parcelId,
+    parcelId,
+    rank,
+    address: streetAddress,
+    city,
+    county,
+    zip: profile.zip || property.zip || permitPayload?.address?.zip_code || null,
+    lat,
+    lon,
+    propertyClass,
+    singleFamilySignal: /single.?family|s\.fam|detached|residential/i.test(propertyClass) ? 2 : 1,
+    yearBuilt,
+    propertyAgeYears: yearBuilt ? Math.max(0, currentYear - yearBuilt) : null,
+    assessedValue: assessedValue && assessedValue > 10_000_000 ? Math.round(assessedValue / 100) : assessedValue,
+    permit,
+    aeroLeadScore: priorityScore,
+    aeroLeadScoreVersion: SCORE_VERSION,
+    aeroLeadScoreBreakdown: {
+      collection_rank: rank,
+      opportunity: Number(profile.opportunity || 0),
+      evidence_confidence: confidenceScore,
+      completion_pct: completion,
+    },
+    aeroLeadMissingEvidence: missing,
+    evidenceScore: completion,
+    confidenceScore,
+    priorityScore,
+    evidenceTwinPriorityScore: priorityScore,
+    evidenceTwinConfidenceScore: confidenceScore,
+    scoringVersion: SCORE_VERSION,
+    opportunityScore: Number(profile.opportunity || 0),
+    evidenceConfidence: Number(profile.evidence_confidence || 0),
+    contractorValueScore: Number(profile.commercial_priority || 0),
+    scoreStatus: "COLLECTION",
+    gatekeeperClassification: "BYPASSED_FOR_COLLECTION",
+    scoreBreakdown: {
+      rank_score: priorityScore,
+      opportunity: Number(profile.opportunity || 0),
+      confidence: confidenceScore,
+      doctor_completion: completion,
+    },
+    evidenceSummary: {
+      permit: permitComplete,
+      storm: weatherComplete,
+      assessor: assessorComplete,
+      imagery: imageryComplete,
+    },
+    nextEvidencePlan: missing,
+    humanReview: true,
+    reviewStatus: profile.review_status || "pending",
+    categories: ["collection-ready", profile.deep_dive_tier].filter(Boolean),
+    breakdown: {
+      collection_rank: rank,
+      opportunity: Number(profile.opportunity || 0),
+      confidence: confidenceScore,
+      doctor_completion: completion,
+    },
+    reasons: [
+      "Real parcel identity, coordinates, and stored imagery verified",
+      "GateKeeper paused for publication; retained as an audit layer",
+      ...(profile.gate_reasons || []),
+    ],
+    tier: profile.deep_dive_tier || (rank <= 100 ? "TOP_100" : "TOP_500"),
+    selectionTrack: "oversight_collection",
+    sourceStatus: {
+      permit: permitComplete,
+      storm: weatherComplete,
+      assessor: assessorComplete,
+      imagery: imageryComplete,
+    },
+    validationStatus: profile.doctor_gate_status || "REPAIRING",
+    validationScore: completion,
+    validationConfidence: confidenceScore,
+    lastValidatedAt: profile.ranked_at || profile.updated_at || null,
+    scoredAt: profile.ranked_at || profile.updated_at || null,
+    imageUrl: imagery.image_url || null,
+    imageIsFallback: false,
+    googleMapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`,
+    streetViewUrl: streetViewUrl(lat, lon, fullAddress),
+  };
 }
 
-export async function GET(req){
-  const supabase=supabaseServer();
-  if(!supabase)return Response.json({ok:false,error:"Supabase not configured.",leads:[],total:0},{status:500});
-  const {searchParams}=new URL(req.url);const requested=searchParams.get("tier");const tier=TIER_CAPS[requested]?requested:"review";const limit=Math.min(Number(searchParams.get("limit"))||TIER_CAPS[tier],TIER_CAPS[tier]);
-  let rows=[],partialErrors=[];try{({rows,partialErrors}=await fetchCandidateRows(supabase))}catch(error){return Response.json({ok:false,error:error.message,leads:[],total:0},{status:500})}
-  const ranked=rankRows(rows);
-  let pool=tier==="contractor"?ranked.filter(r=>r.review_status==="approved"&&r.evidenceTwin?.scoreStatus==="CERTIFIED"&&r.liteTier==="TOP20"):ranked;
-  if(tier==="candidates")pool=pool.slice(0,500);if(tier==="review")pool=pool.slice(0,100);
-  const currentYear=new Date().getFullYear();
-  const top=pool.slice(0,limit).map((r,i)=>{
-    const permit=permitSummary(r);
-    const yearBuilt=Number(r.year_built)||null;
-    return {
-      id:r.id,rank:r.aeroLeadRank||i+1,address:r.address,city:r.city,county:r.county,lat:r.lat,lon:r.lon,
-      propertyClass:r.property_class||null,singleFamilySignal:r.singleFamilySignal||0,
-      yearBuilt,propertyAgeYears:yearBuilt?Math.max(0,currentYear-yearBuilt):null,
-      assessedValue:r.assessed_value,permit,
-      aeroLeadScore:Number(r.aeroLeadScore||0),aeroLeadScoreVersion:r.aeroLeadScoreVersion,
-      aeroLeadScoreBreakdown:r.aeroLeadScoreBreakdown||{},aeroLeadMissingEvidence:r.aeroLeadMissingEvidence||[],
-      evidenceScore:Number(r.evidenceScore??r.evidence_score??0),confidenceScore:Number(r.confidenceScore??r.confidence_score??0),priorityScore:Number(r.legacyPriorityScore??r.priority_score??0),
-      evidenceTwinPriorityScore:Number(r.evidenceTwinPriorityScore||0),evidenceTwinConfidenceScore:Number(r.evidenceTwinConfidenceScore||0),
-      scoringVersion:r.evidenceTwin?.version||EVIDENCE_TWIN_VERSION,
-      opportunityScore:r.evidenceTwin?.opportunityScore??0,evidenceConfidence:r.evidenceTwin?.evidenceConfidence??0,contractorValueScore:r.evidenceTwin?.contractorValueScore??0,
-      scoreStatus:r.evidenceTwin?.scoreStatus||"PROVISIONAL",gatekeeperClassification:r.evidenceTwin?.classification||"HOLD-FOR-VERIFICATION",
-      scoreBreakdown:r.evidenceTwin?.breakdown||{},evidenceSummary:r.evidenceTwin?.evidenceSummary||{},nextEvidencePlan:r.evidenceTwin?.evidencePlan||[],
-      humanReview:tier==="review"?true:!!r.humanReview,reviewStatus:r.review_status||"pending",categories:r.categories||[],breakdown:r.breakdown||{},reasons:r.reasons||[],tier:r.liteTier,selectionTrack:r.selectionTrack,
-      sourceStatus:r.sourceStatus||{},validationStatus:r.validation_status||"unvalidated",validationScore:r.validation_score??0,validationConfidence:r.validation_confidence??0,lastValidatedAt:r.last_validated_at,scoredAt:r.scored_at,
-      imageUrl:null,imageIsFallback:false,
-      googleMapsUrl:`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${r.address||""}, ${r.city||""}, MN`)}`,
-      streetViewUrl:streetViewUrl(r)
-    };
-  });
-  try{
-    const ids=top.map(r=>r.id).filter(Boolean);
-    if(ids.length){
-      const {data:rawImages}=await supabase.from("property_images").select("property_id,image_url,enhanced_image_url,original_image_url,storage_path,provider,view,fetched_at").in("property_id",ids).order("fetched_at",{ascending:false});
-      const images=await signImageRows(supabase,rawImages||[],900);
-      const byId=new Map();
-      for(const img of images||[])if(!byId.has(String(img.property_id)))byId.set(String(img.property_id),img.signed_url||img.enhanced_image_url||img.image_url||img.original_image_url||null);
-      for(const lead of top){const cached=byId.get(String(lead.id));if(cached){lead.imageUrl=cached;lead.imageIsFallback=false;lead.sourceStatus={...lead.sourceStatus,imagery:true}}}
-    }
-  }catch(e){console.warn(`[top-leads] image lookup failed: ${e.message}`)}
-  for(const lead of top)if(!lead.imageUrl&&lead.lat!=null&&lead.lon!=null){lead.imageUrl=freeSatelliteFallback(Number(lead.lat),Number(lead.lon));lead.imageIsFallback=true}
-  return Response.json({ok:true,tier,cap:TIER_CAPS[tier],leads:top,total:top.length,scanned:rows.length,entered:ranked.length,top100Count:Math.min(100,ranked.length),top500Count:Math.min(500,ranked.length),liveScored:true,aeroLeadScoreVersion:top[0]?.aeroLeadScoreVersion||"aerolead-native-1.0",scoringVersion:EVIDENCE_TWIN_VERSION,deduped:true,residentialFiltered:true,singleFamilyPrioritized:true,scanPages:MAX_SCAN_PAGES,partialErrors});
+export async function GET(req) {
+  const db = supabaseServer();
+  if (!db) return Response.json({ ok: false, error: "Supabase not configured.", leads: [], total: 0 }, { status: 500 });
+
+  const { searchParams } = new URL(req.url);
+  const requestedTier = searchParams.get("tier");
+  const tier = TIER_CAPS[requestedTier] ? requestedTier : "review";
+  const requestedLimit = Number(searchParams.get("limit")) || TIER_CAPS[tier];
+  const limit = Math.max(1, Math.min(requestedLimit, TIER_CAPS[tier]));
+
+  try {
+    const data = await loadOversightConsoleData(db);
+    if (data.connectionError) throw new Error(data.connectionError);
+
+    const indexed = evidenceIndex(data.evidence);
+    const ranked = data.profiles
+      .filter((profile) => profile.leaderboard_eligible)
+      .map((profile, index) => mapLead(profile, indexed, index + 1));
+    const pool = tier === "contractor"
+      ? [...ranked].sort((left, right) =>
+          Number(right.reviewStatus === "approved") - Number(left.reviewStatus === "approved") ||
+          left.rank - right.rank
+        )
+      : ranked;
+    const leads = pool.slice(0, limit);
+
+    return Response.json({
+      ok: true,
+      tier,
+      cap: TIER_CAPS[tier],
+      leads,
+      total: leads.length,
+      scanned: data.totalProfiles,
+      entered: data.eligibleCount,
+      top100Count: Math.min(100, data.eligibleCount),
+      top500Count: Math.min(500, data.eligibleCount),
+      photoCount: data.photoCount,
+      photoCoverage: data.photoCoverage,
+      liveScored: true,
+      gatekeeperMode: "BYPASSED_FOR_COLLECTION",
+      aeroLeadScoreVersion: SCORE_VERSION,
+      scoringVersion: SCORE_VERSION,
+      deduped: true,
+      residentialFiltered: true,
+      singleFamilyPrioritized: true,
+      partialErrors: [],
+    });
+  } catch (error) {
+    return Response.json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to load active oversight leads.",
+      leads: [],
+      total: 0,
+    }, { status: 500 });
+  }
 }

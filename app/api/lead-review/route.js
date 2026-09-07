@@ -4,11 +4,9 @@ export const dynamic = "force-dynamic";
 // POST /api/lead-review
 // body: { id: string, status: 'approved'|'partial'|'rejected'|'needs_images', notes?: string, adjustment?: number }
 //
-// This is the human-review step that sits in the MIDDLE of the pipeline
-// (permit -> storm -> evidence -> property value -> human review ->
-// priority), not bolted on after. Setting review_status here is what
-// lets /api/top-leads suppress a rejected lead's priority score and lets
-// tier=contractor only pull review_status='approved' leads.
+// Human review annotates the active Oversight profile. It does not gate the
+// collection leaderboard; approved profiles are simply shown first in the
+// contractor package.
 
 const VALID = ["approved", "partial", "rejected", "needs_images", "pending"];
 
@@ -24,13 +22,13 @@ export async function POST(req) {
   }
 
   const { error } = await supabase
-    .from("batch_leads")
+    .from("roof_profiles")
     .update({
       review_status: status,
       review_status_updated_at: new Date().toISOString(),
       human_review_notes: notes ?? null,
     })
-    .eq("id", id);
+    .eq("parcel_id", id);
 
   if (error) return Response.json({ ok: false, error: error.message }, { status: 500 });
 

@@ -40,6 +40,42 @@ function imageUrl(row: any): string | null {
   return `/api/oversight/image/${encodeURIComponent(String(row.parcel_id))}?v=${encodeURIComponent(version)}`;
 }
 
+function isUsableEvidence(row: any): boolean {
+  const payload = row?.payload;
+  if (!payload || payload.reason || payload.error) return false;
+
+  if (row.type === "IMAGERY") return Boolean(payload.storage_path);
+  if (row.type === "STRUCTURE") {
+    return Boolean(
+      payload.address ||
+      payload.latitude != null ||
+      payload.longitude != null ||
+      payload.year_built ||
+      payload.yearBuilt ||
+      payload.effective_year_built ||
+      payload.property_type ||
+      payload.dwelling_type
+    );
+  }
+  if (row.type === "PROPERTY") {
+    return Boolean(payload.matched_address || payload.address || payload.zip || payload.latitude != null || payload.longitude != null);
+  }
+  if (row.type === "PERMIT") {
+    return Boolean(
+      payload.id ||
+      payload.number ||
+      payload.issue_date ||
+      payload.description ||
+      payload.search_result ||
+      Array.isArray(payload.records)
+    );
+  }
+  if (row.type === "WEATHER") {
+    return Object.keys(payload).some(key => key !== "reason" && key !== "error");
+  }
+  return Object.keys(payload).length > 0;
+}
+
 export async function loadOversightConsoleData(db: any) {
   const [profilesResult, ringsResult, eligibleResult] = await Promise.all([
     db
@@ -58,12 +94,14 @@ export async function loadOversightConsoleData(db: any) {
   const evidenceErrors = batchResults.map(result => result.error).filter(Boolean);
 
   // Queries are newest-first. Keep the newest usable record of each evidence
-  // type for each property so the client gets complete coverage without a huge
-  // history payload.
+  // type for each property. A later crawler marker such as
+  // { reason: "provider_not_configured" } must never hide a real assessor
+  // record, permit, or privately stored image that was already collected.
   const latest = new Map<string, any>();
   for (const row of batchResults.flatMap(result => result.data)) {
     const key = `${row.parcel_id}:${row.type}`;
-    if (!latest.has(key)) latest.set(key, row);
+    const current = latest.get(key);
+    if (!current || (!isUsableEvidence(current) && isUsableEvidence(row))) latest.set(key, row);
   }
 
   const evidence = [...latest.values()]
