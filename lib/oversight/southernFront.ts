@@ -38,7 +38,11 @@ async function censusMatch(candidate: Candidate) {
   if (!response.ok) return null;
   const match = (await response.json())?.result?.addressMatches?.[0];
   if (!match) return null;
-  return { matched_address: match.matchedAddress, latitude: match.coordinates?.y, longitude: match.coordinates?.x, tiger_line_id: match.tigerLine?.tigerLineId || null, zip: String(match.matchedAddress || "").match(/\b\d{5}\b/)?.[0] || null };
+  // Census matched addresses end with the postal ZIP. Taking the first
+  // five-digit token corrupts addresses whose house number also has five
+  // digits (for example, 14101 Park Ave became ZIP 14101).
+  const zip = String(match.matchedAddress || "").match(/\b(\d{5})(?:-\d{4})?\s*$/)?.[1] || null;
+  return { matched_address: match.matchedAddress, latitude: match.coordinates?.y, longitude: match.coordinates?.x, tiger_line_id: match.tigerLine?.tigerLineId || null, zip };
 }
 
 export async function runSouthernFrontDiscovery(db: SupabaseClient, options = { perCity: 8, censusPerCity: 4 }) {

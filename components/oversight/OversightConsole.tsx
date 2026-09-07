@@ -46,7 +46,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
   const evidence = initial.evidence.filter((e: any) => e.parcel_id === active?.parcel_id);
   const type = (name: string) => evidence.filter((e: any) => e.type === name);
   const liveCount = initial.evidence.filter((e: any) => e.reality === "REAL_NOW" || e.reality === "CACHED_REAL").length;
-  const verified = initial.profiles.filter((p: any) => p.gate_allowed).length;
+  const collectionLeads = initial.eligibleCount ?? initial.profiles.filter((p: any) => p.leaderboard_eligible || p.live_rank != null).length;
   const ring = initial.rings.find((r: any) => r.active) || initial.rings[0];
   const audit = active ? initial.audits?.[active.parcel_id] : null;
   const doctorComplete = Object.values(initial.audits || {}).filter((item: any) => item.complete).length;
@@ -63,8 +63,8 @@ export default function OversightConsole({ initial }: { initial: any }) {
     <div className="ov-bypass glass"><span><i /> COLLECTION-ONLY FLIGHT MODE</span><b>GATEKEEPER EVALUATION PAUSED</b><small>Scores and ranks remain frozen while providers acquire and persist evidence.</small></div>
 
     <section className="ov-stats">
-      <Stat label="Profiles" value={initial.profiles.length} />
-      <Stat label="Verified" value={verified} tone="green" />
+      <Stat label="Profiles" value={initial.totalProfiles ?? initial.profiles.length} />
+      <Stat label="Collection leads" value={collectionLeads} tone="green" sub="GateKeeper bypassed" />
       <Stat label="Photos connected" value={`${initial.photoCount ?? imageryByParcel.size}/${initial.profiles.length}`} tone="cyan" sub={`${liveCount} current evidence records`} />
       <Stat label="Doctor complete" value={`${doctorComplete}/${initial.profiles.length}`} tone="amber" />
       <Stat label="Active ring" value={ring?.ring_id || "—"} sub={ring ? `${Math.round(Number(ring.completion_pct))}% complete` : "awaiting seed"} />

@@ -41,14 +41,15 @@ function imageUrl(row: any): string | null {
 }
 
 export async function loadOversightConsoleData(db: any) {
-  const [profilesResult, ringsResult] = await Promise.all([
+  const [profilesResult, ringsResult, eligibleResult] = await Promise.all([
     db
       .from("roof_profiles")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("live_rank", { ascending: true, nullsFirst: false })
       .order("rank_score", { ascending: false })
       .limit(PROFILE_LIMIT),
     db.from("ring_status").select("*").order("ring_id"),
+    db.from("roof_profiles").select("parcel_id", { count: "exact", head: true }).eq("leaderboard_eligible", true),
   ]);
 
   const profiles: any[] = profilesResult.data || [];
@@ -81,10 +82,12 @@ export async function loadOversightConsoleData(db: any) {
     const rank = Number(profile.live_rank);
     return rank > 0 ? rank <= 100 : index < 100;
   });
-  const error = profilesResult.error || ringsResult.error || evidenceErrors[0] || null;
+  const error = profilesResult.error || ringsResult.error || eligibleResult.error || evidenceErrors[0] || null;
 
   return {
     profiles,
+    totalProfiles: profilesResult.count ?? profiles.length,
+    eligibleCount: eligibleResult.count ?? profiles.filter((profile: any) => profile.leaderboard_eligible).length,
     evidence,
     rings: ringsResult.data || [],
     photoCount: parcelsWithPhotos.size,
