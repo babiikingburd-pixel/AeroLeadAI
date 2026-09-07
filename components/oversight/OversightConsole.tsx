@@ -1,4 +1,5 @@
 "use client";
+import Image from "next/image";
 import { useMemo, useState } from "react";
 
 const realityLabel: Record<string, string> = { REAL_NOW: "LIVE", CACHED_REAL: "CACHED", UNAVAILABLE: "OFFLINE", UNKNOWN: "UNKNOWN" };
@@ -64,7 +65,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
     <section className="ov-stats">
       <Stat label="Profiles" value={initial.profiles.length} />
       <Stat label="Verified" value={verified} tone="green" />
-      <Stat label="Real evidence" value={liveCount} tone="cyan" />
+      <Stat label="Photos connected" value={`${initial.photoCount ?? imageryByParcel.size}/${initial.profiles.length}`} tone="cyan" sub={`${liveCount} current evidence records`} />
       <Stat label="Doctor complete" value={`${doctorComplete}/${initial.profiles.length}`} tone="amber" />
       <Stat label="Active ring" value={ring?.ring_id || "—"} sub={ring ? `${Math.round(Number(ring.completion_pct))}% complete` : "awaiting seed"} />
     </section>
@@ -85,7 +86,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
           {!profiles.length && <Empty text="No fabricated leads. Properties appear only from collected evidence." />}
           {profiles.map((p: any, index: number) => { const image = imageryByParcel.get(p.parcel_id); return <button className={`lead-row ${active?.parcel_id === p.parcel_id ? "selected" : ""}`} onClick={() => setSelectedId(p.parcel_id)} key={p.parcel_id}>
             <span className={`rank ${scoreTone(Number(p.rank_score ?? p.opportunity))}`}>{String(Number(p.live_rank || index + 1)).padStart(2,"0")}</span>
-            <span className="lead-thumb">{image ? <img src={image.payload.image_url} alt="" /> : <i>NO IMAGE</i>}</span>
+            <span className="lead-thumb">{image ? <Image src={image.payload.image_url} alt={`Aerial view of ${p.address}`} width={54} height={42} unoptimized /> : <i>NO IMAGE</i>}</span>
             <span className="lead-copy"><b>{p.address}</b><small>{p.doctor_gate_status || p.state?.replaceAll("_", " ")} · {Math.round(Number(p.evidence_confidence) * 100)}% confidence</small></span>
             <strong title="Live rank score">{Math.round(Number(p.rank_score ?? p.opportunity ?? 0))}</strong>
           </button>})}
@@ -147,7 +148,7 @@ function Instrument({title,records,className,accent,address,onOpen}:{title:strin
   return <article className={`instrument ${className} ${accent} ${r ? "present" : "standby"}`}>
     <header><span>{title}</span><b>{r ? realityLabel[r.reality] || r.reality : "STANDBY"}</b></header>
     <button className="instrument-open" disabled={!r} onClick={() => r && onOpen(r)}>
-      {r ? <>{imageUrl && <div className="instrument-image"><img src={imageUrl} alt={`Satellite view centered on ${address || r.parcel_id}`} /><span className="target-crosshair" aria-hidden="true"><i/><b/></span><label>{address || r.parcel_id}<small>TARGET ADDRESS POINT · OPEN FOR SOURCE</small></label></div>}<strong>{r.provider}</strong><p>{r.effective_at ? new Date(r.effective_at).toLocaleDateString() : r.payload?.capture_date || "Capture date pending"}</p><small>{Math.round(Number(r.confidence)*100)}% source confidence · click for provenance</small></> : <><strong>NO RECORD</strong><p>Provider will retry autonomously</p></>}
+      {r ? <>{imageUrl && <div className="instrument-image"><Image src={imageUrl} alt={`Satellite view centered on ${address || r.parcel_id}`} fill sizes="(max-width: 900px) 100vw, 50vw" unoptimized /><span className="target-crosshair" aria-hidden="true"><i/><b/></span><label>{address || r.parcel_id}<small>TARGET ADDRESS POINT · OPEN FOR SOURCE</small></label></div>}<strong>{r.provider}</strong><p>{r.effective_at ? new Date(r.effective_at).toLocaleDateString() : r.payload?.capture_date || "Capture date pending"}</p><small>{Math.round(Number(r.confidence)*100)}% source confidence · click for provenance</small></> : <><strong>NO RECORD</strong><p>Provider will retry autonomously</p></>}
     </button>
   </article>
 }
@@ -176,7 +177,7 @@ function EvidenceDrawer({record,onClose}:{record:any,onClose:()=>void}) {
   return <div className="evidence-overlay" onMouseDown={onClose}><section className="evidence-drawer glass" onMouseDown={e=>e.stopPropagation()}>
     <header><div><small>EVIDENCE PROVENANCE</small><h2>{record.type} · {record.provider}</h2></div><button onClick={onClose}>×</button></header>
     <div className="evidence-meta"><span><small>REALITY</small><b>{record.reality}</b></span><span><small>CONFIDENCE</small><b>{Math.round(Number(record.confidence || 0)*100)}%</b></span><span><small>CAPTURED</small><b>{record.captured_at ? new Date(record.captured_at).toLocaleString() : "—"}</b></span></div>
-    {record.payload?.image_url && <div className="drawer-image"><img src={record.payload.image_url} alt={`Evidence for ${record.parcel_id}`} /><span className="target-crosshair large"><i/><b/></span></div>}
+    {record.payload?.image_url && <div className="drawer-image"><Image src={record.payload.image_url} alt={`Evidence for ${record.parcel_id}`} fill sizes="(max-width: 760px) 100vw, 680px" unoptimized /><span className="target-crosshair large"><i/><b/></span></div>}
     <div className="source-block"><small>SOURCE REFERENCE</small>{record.source_ref ? <a href={record.source_ref} target="_blank" rel="noreferrer">Open original provider/source ↗</a> : <b>No external source URL recorded</b>}</div>
     <div className="payload-grid">{payloadEntries.map(([key,value])=><div key={key}><small>{key.replaceAll("_"," ")}</small><b>{String(value)}</b></div>)}</div>
     <footer>This panel shows the evidence record used by Oversight. The center marker identifies the stored address/coordinate target; it is not a surveyed parcel-boundary overlay.</footer>
