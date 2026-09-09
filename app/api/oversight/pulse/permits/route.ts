@@ -7,7 +7,11 @@ import { makeEvidence } from "@/lib/oversight/evidence";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const BATCH_SIZE = 5;
+// One Shovels parcel can require two sequential external calls, each capped at
+// 12 seconds. Processing one parcel per pulse guarantees external I/O remains
+// comfortably inside Vercel's 60-second ceiling; the queue advances on the
+// next pulse instead of losing the whole batch to a function timeout.
+const BATCH_SIZE = 1;
 const SHOVELS_DOCS = "https://www.shovels.ai/solutions/api";
 
 function hash(value: string) {
