@@ -5,9 +5,12 @@ import { OversightPipeline } from "@/lib/oversight/pipeline";
 import { createEvidenceProvidersForEngine, crawlerGroupEngines, type CrawlerGroup } from "@/lib/oversight/providerGroups";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
-const BATCH_SIZE = 10;
-const PARALLELISM = 5;
+export const maxDuration = 60;
+// Two waves of provider work. OversightPipeline now hard-caps each provider
+// collection so the worker finishes well before the platform timeout.
+const BATCH_SIZE = 6;
+const PARALLELISM = 3;
+const STALE_LOCK_MS = 10 * 60_000;
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -51,8 +54,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!db) return NextResponse.json({ ok: false, error: "supabase_not_configured" }, { status: 503 });
   if (!await consumeToken(db, request.headers.get("x-oversight-pulse-token"))) return NextResponse.json({ ok: false, error: "invalid_or_expired_pulse_token" }, { status: 401 });
 
-  await db.rpc("seed_oversight_crawler_jobs");
   const now = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - STALE_LOCK_MS).toISOString();
+
+  // A serverless timeout can terminate a worker after it marks a job RUNNING.
+  // Reclaim those abandoned locks automatically so no parcel can remain stuck
+  // forever after a killed invocation.
+  const { error: staleLockError } = await db.from("oversight_crawler_jobs")
+    .update({
+      status: "RETRY",
+      locked_at: null,
+      locked_by: null,
+      next_attempt_at: now,
+      last_error: "stale_worker_lock_recovered",
+      updated_at: now,
+    })
+    .eq("worker_group", group)
+    .eq("status", "RUNNING")
+    .lt("locked_at", staleBefore);
+  if (staleLockError) return NextResponse.json({ ok: false, error: `stale_lock_recovery_failed: ${staleLockError.message}` }, { status: 500 });
+
+  await db.rpc("seed_oversight_crawler_jobs");
   const { data: candidates, error: queueError } = await db.from("oversight_crawler_jobs")
     .select("id,parcel_id,engine_type,requirement,priority,rank_tier,attempts")
     .eq("worker_group", group).in("status", ["READY", "RETRY"]).lte("next_attempt_at", now)
@@ -97,7 +119,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const status = satisfied ? "DONE" : "RETRY";
       const delayMinutes = satisfied ? 0 : Math.min(720, 10 * 2 ** Math.min(attempts, 5));
       await db.from("oversight_crawler_jobs").update({ status, attempts, last_error: satisfied ? null : "evidence_not_yet_satisfied", next_attempt_at: new Date(Date.now() + delayMinutes * 60_000).toISOString(), locked_at: null, locked_by: null, updated_at: new Date().toISOString() }).eq("id", job.id);
-      return { jobId: job.id, parcelId: job.parcel_id, requirement: job.requirement, rank: profile.live_rank, satisfied, providerFailures: result.providerFailures };
+      return { jobId: job.id, parcelId: job.parcel_id, requirement: job.requirement, rank: profile.live_rank, satisfied, providerFailures: result.providerFailures, degraded: result.degraded };
     } catch (error) {
       const attempts = Number(job.attempts || 0) + 1;
       const delayMinutes = Math.min(1440, 15 * 2 ** Math.min(attempts, 6));
