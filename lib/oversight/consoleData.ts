@@ -12,6 +12,12 @@ function chunks<T>(items: T[], size: number): T[][] {
   return result;
 }
 
+function warningMessage(error: any): string | null {
+  if (!error) return null;
+  const message = error?.message || String(error);
+  return String(message).slice(0, 300);
+}
+
 async function loadEvidenceBatch(db: any, parcelIds: string[]): Promise<QueryResult> {
   const data: any[] = [];
   let from = 0;
@@ -120,7 +126,15 @@ export async function loadOversightConsoleData(db: any) {
     const rank = Number(profile.live_rank);
     return rank > 0 ? rank <= 100 : index < 100;
   });
-  const error = profilesResult.error || ringsResult.error || eligibleResult.error || evidenceErrors[0] || null;
+
+  const warnings = [
+    profilesResult.error,
+    ringsResult.error,
+    eligibleResult.error,
+    ...evidenceErrors,
+  ]
+    .map(warningMessage)
+    .filter((message): message is string => Boolean(message));
 
   return {
     profiles,
@@ -135,6 +149,10 @@ export async function loadOversightConsoleData(db: any) {
       top500Photos: profiles.filter((profile: any) => parcelsWithPhotos.has(profile.parcel_id)).length,
       top500Total: profiles.length,
     },
-    connectionError: error?.message || null,
+    degraded: warnings.length > 0,
+    warnings,
+    // Preserve the old field for existing clients while no longer treating a
+    // partial query failure as a reason to discard all usable console data.
+    connectionError: warnings[0] || null,
   };
 }

@@ -6,7 +6,10 @@ import { OversightPipeline } from "@/lib/oversight/pipeline";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-const BATCH_SIZE = 6;
+// Keep worst-case serial provider work safely below the 60s runtime ceiling.
+// OversightPipeline caps each task at the provider timeout (12s by default),
+// so two tasks leave headroom for Supabase reads/writes and response serialization.
+const BATCH_SIZE = 2;
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -82,7 +85,7 @@ export async function POST(request: NextRequest) {
         ...coords(structure),
       });
       await db.from("oversight_audit_tasks").update({ attempts: Number(task.attempts || 0) + 1, last_error: null, next_attempt_at: new Date(Date.now() + 30 * 60_000).toISOString(), updated_at: new Date().toISOString() }).eq("parcel_id", task.parcel_id).eq("requirement", task.requirement);
-      results.push({ parcelId: task.parcel_id, requirement: task.requirement, evaluation: result.evaluation, providerFailures: result.providerFailures });
+      results.push({ parcelId: task.parcel_id, requirement: task.requirement, evaluation: result.evaluation, providerFailures: result.providerFailures, degraded: result.degraded });
     } catch (error) {
       const attempts = Number(task.attempts || 0) + 1;
       const delayMinutes = Math.min(1440, 15 * 2 ** Math.min(attempts, 6));
