@@ -6,6 +6,7 @@ import "./oversight.css";
 import "./cockpit-mode.css";
 import "./superb.css";
 import "./holo-deck.css";
+import "./damage-overlay.css";
 export const dynamic = "force-dynamic";
 
 export default async function OversightPage() {
