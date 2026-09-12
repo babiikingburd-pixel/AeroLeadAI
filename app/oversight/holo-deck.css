@@ -1,0 +1,123 @@
+/* AeroLeadAI Superb — transparent layered spaceship command deck. */
+:root{
+  --deck-glass:rgba(5,16,29,.28);
+  --deck-glass-strong:rgba(5,16,29,.46);
+  --deck-edge:rgba(111,225,255,.24);
+  --deck-edge-hot:rgba(111,225,255,.56);
+  --deck-depth:0 30px 80px rgba(0,0,0,.28),inset 0 1px rgba(255,255,255,.08);
+}
+
+.ov-shell{perspective:1600px}
+.ov-shell:before{
+  content:"";position:fixed;inset:9% 5% 2%;z-index:0;pointer-events:none;
+  border:1px solid rgba(95,224,255,.055);border-radius:42px;
+  background:
+    linear-gradient(180deg,rgba(95,224,255,.045),transparent 25%),
+    repeating-linear-gradient(90deg,transparent 0 119px,rgba(95,224,255,.022) 120px);
+  transform:rotateX(64deg) translateZ(-130px) scale(1.12);transform-origin:center 82%;
+  filter:drop-shadow(0 0 44px rgba(95,224,255,.04));
+}
+
+.glass{
+  background:
+    linear-gradient(145deg,rgba(21,47,74,.24),rgba(3,12,23,.34));
+  border-color:var(--deck-edge);
+  box-shadow:var(--deck-depth);
+  backdrop-filter:blur(18px) saturate(150%);
+  -webkit-backdrop-filter:blur(18px) saturate(150%);
+}
+.glass:before{
+  content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
+  background:linear-gradient(115deg,rgba(255,255,255,.055),transparent 22%,transparent 72%,rgba(95,224,255,.025));
+}
+
+.ov-top{transform:translateZ(44px);background:linear-gradient(145deg,rgba(16,43,69,.27),rgba(3,12,23,.31))}
+.ov-bypass{transform:translateZ(32px);background:rgba(6,19,34,.24)}
+.ov-stats{transform-style:preserve-3d}
+.ov-stat:nth-child(1){transform:translateZ(24px)}
+.ov-stat:nth-child(2){transform:translateZ(30px)}
+.ov-stat:nth-child(3){transform:translateZ(36px)}
+.ov-stat:nth-child(4){transform:translateZ(30px)}
+.ov-stat:nth-child(5){transform:translateZ(24px)}
+.ov-deck{transform-style:preserve-3d}
+.ov-queue{transform:translateZ(18px) rotateY(1.1deg);transform-origin:right center;background:rgba(5,16,29,.26)}
+.ov-focus{transform:translateZ(46px);background:rgba(4,14,26,.20);overflow:visible}
+.ov-intel{transform:translateZ(23px) rotateY(-1.1deg);transform-origin:left center;background:rgba(5,16,29,.26)}
+
+/* Fine luminous edges make the deck read like suspended glass rather than cards. */
+.ov-queue:after,.ov-focus:after,.ov-intel:after,.ov-top:after{
+  content:"";position:absolute;pointer-events:none;left:5%;right:5%;top:-1px;height:1px;
+  background:linear-gradient(90deg,transparent,var(--deck-edge-hot),transparent);
+  opacity:.58;filter:drop-shadow(0 0 6px rgba(95,224,255,.42));
+}
+
+.instrument-layer{
+  transform-style:preserve-3d;
+  background:
+    radial-gradient(circle at 27% 42%,rgba(95,224,255,.065),transparent 50%),
+    linear-gradient(rgba(95,224,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(95,224,255,.025) 1px,transparent 1px),
+    rgba(1,5,11,.16);
+  background-size:auto,36px 36px,36px 36px,auto;
+  border-color:rgba(95,224,255,.10);
+  overflow:visible;
+}
+.instrument{background:linear-gradient(145deg,rgba(9,25,43,.32),rgba(3,11,21,.42));backdrop-filter:blur(14px) saturate(145%);-webkit-backdrop-filter:blur(14px) saturate(145%)}
+.instrument.imagery{transform:translateZ(44px);box-shadow:0 24px 70px rgba(0,0,0,.26),0 0 35px rgba(95,224,255,.035)}
+.instrument.permits{transform:translateZ(28px)}
+.instrument.weather{transform:translateZ(20px)}
+.instrument.structure{transform:translateZ(12px)}
+.instrument:hover{transform:translateZ(62px) translateY(-3px)}
+.instrument.permits:hover{transform:translateZ(46px) translateY(-3px)}
+.instrument.weather:hover{transform:translateZ(38px) translateY(-3px)}
+.instrument.structure:hover{transform:translateZ(30px) translateY(-3px)}
+.instrument-image{background:rgba(0,4,10,.16)}
+.instrument-image img{opacity:.91;filter:contrast(1.07) saturate(1.08) brightness(.96)}
+.instrument-image:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(95,224,255,.03),transparent 28%,transparent 72%,rgba(0,5,12,.25))}
+
+/* Translucent layers: opening evidence never destroys the lead context below. */
+.evidence-overlay{
+  background:rgba(0,5,12,.18)!important;
+  backdrop-filter:blur(3px) saturate(112%)!important;
+  -webkit-backdrop-filter:blur(3px) saturate(112%)!important;
+  perspective:1400px;
+}
+.evidence-drawer{
+  background:linear-gradient(145deg,rgba(10,32,52,.66),rgba(2,10,20,.62))!important;
+  border-color:rgba(111,225,255,.33)!important;
+  box-shadow:-24px 20px 80px rgba(0,0,0,.30),inset 0 1px rgba(255,255,255,.09)!important;
+  backdrop-filter:blur(16px) saturate(155%)!important;
+  -webkit-backdrop-filter:blur(16px) saturate(155%)!important;
+  transform:translateZ(90px) rotateY(-1.4deg);
+}
+.drawer-image{background:rgba(0,0,0,.12)}
+.drawer-image img{opacity:.88;filter:contrast(1.06) saturate(1.06)}
+
+/* Holographic map sheet. It lives inside the lead cockpit, so the address/score
+   remain visible below it rather than navigating away to a separate page. */
+.map-layer{
+  position:absolute;inset:76px 18px 18px;z-index:45;border:1px solid rgba(111,225,255,.38);border-radius:20px;overflow:hidden;
+  background:linear-gradient(145deg,rgba(5,25,42,.44),rgba(2,10,18,.38));
+  box-shadow:0 34px 95px rgba(0,0,0,.36),0 0 42px rgba(95,224,255,.06),inset 0 1px rgba(255,255,255,.08);
+  backdrop-filter:blur(9px) saturate(140%);-webkit-backdrop-filter:blur(9px) saturate(140%);
+  transform:translateZ(120px) rotateX(.35deg);transform-origin:center bottom;
+}
+.map-layer iframe{position:absolute;inset:0;width:100%;height:100%;border:0;opacity:.72;filter:saturate(.88) contrast(1.03) brightness(.82)}
+.map-layer:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(1,10,19,.20),transparent 32%,transparent 70%,rgba(1,7,14,.30));box-shadow:inset 0 0 80px rgba(0,6,12,.28)}
+.map-layer-head{position:absolute;z-index:3;left:14px;right:14px;top:13px;display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(111,225,255,.24);border-radius:12px;background:rgba(3,15,27,.47);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.map-layer-head div{min-width:0;flex:1}.map-layer-head small,.map-layer-head b{display:block}.map-layer-head small{font-size:7px;letter-spacing:.14em;color:var(--ov-cyan)}.map-layer-head b{font:600 13px 'Chakra Petch',sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.map-layer-head button,.map-trigger{border:1px solid rgba(111,225,255,.25);background:rgba(6,25,42,.34);color:var(--ov-cyan);border-radius:9px;padding:8px 10px;font:700 8px 'JetBrains Mono',monospace;letter-spacing:.07em;cursor:pointer;backdrop-filter:blur(8px)}
+.map-layer-head button:hover,.map-trigger:hover{background:rgba(95,224,255,.10);border-color:rgba(111,225,255,.48);box-shadow:0 0 18px rgba(95,224,255,.08)}
+.focus-actions{display:flex;align-items:center;gap:8px}
+
+/* Subtle ghost of the active address stays readable through raised layers. */
+.focus-head{position:relative;z-index:52}
+.focus-head h1{text-shadow:0 2px 16px rgba(0,4,9,.9),0 0 20px rgba(95,224,255,.10)}
+.focus-head p{text-shadow:0 2px 10px rgba(0,0,0,.92)}
+
+@media(max-width:820px){
+  .ov-queue,.ov-focus,.ov-intel,.ov-top,.ov-bypass,.ov-stat{transform:none}
+  .map-layer{position:fixed;inset:76px 8px 8px;z-index:120;transform:none;border-radius:18px;background:rgba(4,18,31,.55)}
+  .map-layer iframe{opacity:.76}
+  .evidence-drawer{transform:none}
+}
