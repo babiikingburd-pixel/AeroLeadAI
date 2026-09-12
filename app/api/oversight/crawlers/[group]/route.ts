@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { OversightPipeline } from "@/lib/oversight/pipeline";
 import { createEvidenceProvidersForEngine, crawlerGroupEngines, type CrawlerGroup } from "@/lib/oversight/providerGroups";
-import { runNativeRequirement, supportsNativeRequirement } from "@/lib/oversight/nativeWorkers";
+import { runSuperbRequirement, supportsNativeRequirement } from "@/lib/oversight/superbWorkers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -33,7 +33,7 @@ function coords(payload: any) {
 function requirementSatisfied(requirement: string, evidence: any[]) {
   const real = evidence.filter(row => ["REAL_NOW", "CACHED_REAL"].includes(row.reality));
   if (requirement === "identity") return real.some(row => row.type === "PROPERTY" && Number(row.confidence || 0) >= .85);
-  if (requirement === "weather_history") return real.some(row => row.type === "WEATHER" && !row.payload?.reason && !row.payload?.error);
+  if (requirement === "weather_history") return real.some(row => row.type === "WEATHER" && !row.payload?.reason && !row.payload?.error && row.payload?.search_status !== "partial");
   if (requirement === "permit_history") return real.some(row => row.type === "PERMIT" && !row.payload?.reason && !row.payload?.error);
   if (requirement === "property_classification") return real.some(row => row.type === "STRUCTURE" && (row.payload?.property_class || row.payload?.property_type || row.payload?.dwelling_type || row.payload?.use_type || row.payload?.use_code));
   if (requirement === "year_built") return real.some(row => row.type === "STRUCTURE" && (row.payload?.year_built || row.payload?.yearBuilt || row.payload?.effective_year_built || row.payload?.YEAR_BUILT));
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const evidenceByParcel = new Map<string, any[]>();
   for (const row of currentEvidence || []) evidenceByParcel.set(row.parcel_id, [...(evidenceByParcel.get(row.parcel_id) || []), row]);
 
-  const run = await db.from("oversight_crawler_runs").insert({ worker_group: group, engine_type: `group_${group.toLowerCase()}`, metadata: { engines: crawlerGroupEngines(group), batchSize, parallelism, nativeWorkers: true } }).select("id").single();
+  const run = await db.from("oversight_crawler_runs").insert({ worker_group: group, engine_type: `group_${group.toLowerCase()}`, metadata: { engines: crawlerGroupEngines(group), batchSize, parallelism, nativeWorkers: true, strictCompletion: true } }).select("id").single();
   const results: any[] = [];
 
   async function finishJob(job: any, satisfied: boolean, attempts: number, error: string | null = null) {
@@ -139,7 +139,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
 
       if (supportsNativeRequirement(job.requirement)) {
-        const native = await runNativeRequirement({ db, origin: request.nextUrl.origin, profile, structure, requirement: job.requirement });
+        const native = await runSuperbRequirement({ db, origin: request.nextUrl.origin, profile, structure, requirement: job.requirement });
         const refreshed = await parcelEvidence(db, job.parcel_id);
         const satisfied = native.satisfied || requirementSatisfied(job.requirement, refreshed);
         await finishJob(job, satisfied, attempts, satisfied ? null : `native_${native.provider}_not_satisfied`);
@@ -165,5 +165,5 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   for (let i = 0; i < chosen.length; i += parallelism) results.push(...await Promise.all(chosen.slice(i, i + parallelism).map(execute)));
   if (run.data?.id) await db.from("oversight_crawler_runs").update({ finished_at: new Date().toISOString(), attempted: results.length, succeeded: results.filter(x => x.satisfied).length, failed: results.filter(x => x.error).length }).eq("id", run.data.id);
-  return NextResponse.json({ ok: true, group, engines: crawlerGroupEngines(group), attempted: results.length, satisfied: results.filter(x => x.satisfied).length, nativeWorkers: true, results });
+  return NextResponse.json({ ok: true, group, engines: crawlerGroupEngines(group), attempted: results.length, satisfied: results.filter(x => x.satisfied).length, nativeWorkers: true, strictCompletion: true, results });
 }
