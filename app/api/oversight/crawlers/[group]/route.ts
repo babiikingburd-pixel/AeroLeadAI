@@ -95,7 +95,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const ids = chosen.map(job => job.parcel_id);
   const [{ data: profiles, error: profileError }, { data: structures, error: structureError }, { data: currentEvidence, error: evidenceError }] = await Promise.all([
-    db.from("roof_profiles").select("parcel_id,address,zip,state,live_rank,latitude,longitude,lat,lon").in("parcel_id", ids),
+    db.from("roof_profiles").select("parcel_id,address,zip,state,live_rank").in("parcel_id", ids),
     db.from("evidence_records").select("parcel_id,payload,captured_at").in("parcel_id", ids).eq("type", "STRUCTURE").in("reality", ["REAL_NOW", "CACHED_REAL"]).order("captured_at", { ascending: false }),
     db.from("evidence_records").select("parcel_id,type,reality,confidence,effective_at,payload,captured_at").in("parcel_id", ids).order("captured_at", { ascending: false }).limit(3000),
   ]);
