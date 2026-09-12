@@ -38,6 +38,10 @@ export function auditProperty(profile: any, evidence: any[], auditedAt = new Dat
   const propertyType = structurePayload.property_type ?? structurePayload.dwelling_type ?? structurePayload.use_type;
   const yearBuilt = Number(structurePayload.year_built ?? structurePayload.yearBuilt ?? structurePayload.effective_year_built);
   const analysisStatus = String(imageryPayload.damage_analysis_status ?? imageryPayload.analysis_status ?? "").toLowerCase();
+  const captureDateStatus = String(imageryPayload.capture_date_status || "").toLowerCase();
+  const imageryDateResolved = hasValue(imageryPayload.capture_date)
+    || hasValue(imagery.effective_at)
+    || captureDateStatus === "provider_does_not_expose_capture_date";
 
   const checks: Record<DoctorRequirementKey, { complete: boolean; evidenceProvider?: string }> = {
     identity: { complete: hasValue(profile?.parcel_id) && hasValue(profile?.address) && hasValue(profile?.zip) },
@@ -45,7 +49,11 @@ export function auditProperty(profile: any, evidence: any[], auditedAt = new Dat
     property_classification: { complete: hasValue(propertyType), evidenceProvider: structure?.provider },
     year_built: { complete: Number.isInteger(yearBuilt) && yearBuilt >= 1600 && yearBuilt <= new Date(auditedAt).getUTCFullYear(), evidenceProvider: structure?.provider },
     imagery_capture: { complete: Boolean(imagery && hasValue(imageryPayload.storage_path)), evidenceProvider: imagery?.provider },
-    imagery_date: { complete: Boolean(imagery && (hasValue(imageryPayload.capture_date) || hasValue(imagery.effective_at))), evidenceProvider: imagery?.provider },
+    // Some static-tile providers do not expose a per-image capture date. Once
+    // that provider limitation is recorded explicitly, the requirement is
+    // resolved rather than retried forever. The UI still labels the date as
+    // unavailable and relies only on retrieval time for freshness confidence.
+    imagery_date: { complete: Boolean(imagery && imageryDateResolved), evidenceProvider: imagery?.provider },
     imagery_analysis: { complete: ["complete", "completed", "analyzed", "reviewed"].includes(analysisStatus), evidenceProvider: imagery?.provider },
     permit_history: { complete: Boolean(permit), evidenceProvider: permit?.provider },
     weather_history: { complete: Boolean(weather), evidenceProvider: weather?.provider },
@@ -81,4 +89,3 @@ export function auditProperty(profile: any, evidence: any[], auditedAt = new Dat
     auditedAt,
   };
 }
-
