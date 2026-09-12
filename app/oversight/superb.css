@@ -1,0 +1,162 @@
+/* AeroLeadAI Superb — premium visual layer. Loaded after oversight.css. */
+:root{
+  --superb-panel:rgba(8,17,31,.82);
+  --superb-panel-strong:rgba(8,18,33,.94);
+  --superb-border:rgba(157,224,255,.17);
+  --superb-glow:0 24px 70px rgba(0,0,0,.42),inset 0 1px rgba(255,255,255,.055);
+}
+
+.ov-shell{
+  padding:16px;
+  background:
+    radial-gradient(900px 520px at 47% -8%,rgba(36,105,160,.24),transparent 62%),
+    radial-gradient(760px 500px at 95% 20%,rgba(53,220,151,.06),transparent 58%),
+    linear-gradient(180deg,#050b14 0%,#02050a 72%,#010307 100%);
+}
+.ov-grid{opacity:.55;background-size:54px 54px}
+.ov-vignette{box-shadow:inset 0 0 220px rgba(0,0,0,.82)}
+.glass{
+  background:linear-gradient(155deg,rgba(18,36,57,.82),rgba(5,11,21,.86));
+  border-color:var(--superb-border);
+  box-shadow:var(--superb-glow);
+  border-radius:18px;
+}
+
+.ov-top{height:72px;padding:0 22px;border-radius:20px}
+.ov-brand{font-size:14px;letter-spacing:.16em}
+.ov-brand b{font-weight:800;text-shadow:0 0 22px rgba(95,224,255,.4)}
+.ov-brand small{font-size:8px;letter-spacing:.08em}
+.ov-mark{width:11px;height:11px;border-radius:2px}
+.ov-mission{font-size:9px;letter-spacing:.11em;text-transform:uppercase}
+.ov-health{padding:8px 11px;border:1px solid rgba(61,220,151,.13);border-radius:999px;background:rgba(61,220,151,.045)}
+
+.ov-bypass{margin-top:9px;padding:9px 15px;display:flex;align-items:center;gap:14px;border-radius:14px;font-size:9px;color:var(--ov-muted)}
+.ov-bypass span{color:var(--ov-cyan);font-weight:700;letter-spacing:.07em}
+.ov-bypass b{margin-left:auto;color:var(--ov-amber);font:700 10px 'Chakra Petch',sans-serif;letter-spacing:.08em}
+.ov-bypass small{color:var(--ov-muted)}
+
+.ov-stats{gap:10px;margin:10px 0}
+.ov-stat{min-height:78px;padding:13px 16px;border-radius:16px;overflow:hidden}
+.ov-stat:after{content:"";position:absolute;inset:auto 14px 0;height:1px;background:linear-gradient(90deg,transparent,rgba(95,224,255,.22),transparent)}
+.ov-stat small{font-size:8px;letter-spacing:.14em}
+.ov-stat b{font-size:29px;line-height:1.05}
+.ov-stat em{font-size:8px}
+
+.ov-deck{grid-template-columns:340px minmax(620px,1fr) 330px;gap:10px;height:calc(100vh - 237px);min-height:660px}
+.ov-queue,.ov-focus,.ov-intel{border-radius:20px}
+.panel-head{height:50px;padding:0 16px;font-size:9px}
+.mode-tabs{padding:9px;gap:6px}
+.mode-tabs button{padding:9px 4px;border-radius:9px;background:rgba(255,255,255,.025);transition:.18s ease}
+.mode-tabs button:hover{border-color:rgba(95,224,255,.26);background:rgba(95,224,255,.055);color:var(--ov-ice)}
+.mode-tabs button.active{background:linear-gradient(180deg,rgba(95,224,255,.13),rgba(95,224,255,.05));box-shadow:inset 0 0 18px rgba(95,224,255,.05)}
+.lead-search{display:block;padding:0 10px 9px}
+.lead-search span{display:block;margin:0 3px 5px;font-size:7px;color:var(--ov-muted);letter-spacing:.13em}
+.lead-search input{width:100%;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(0,0,0,.2);padding:10px 11px;color:var(--ov-ice);outline:none;font:10px 'JetBrains Mono',monospace}
+.lead-search input:focus{border-color:rgba(95,224,255,.35);box-shadow:0 0 0 3px rgba(95,224,255,.045)}
+.browse-controls{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:6px;padding:0 9px 9px}
+.browse-controls button{border:1px solid rgba(255,255,255,.07);border-radius:9px;background:rgba(255,255,255,.025);color:var(--ov-muted);padding:7px;font:8px 'JetBrains Mono',monospace;cursor:pointer}
+.browse-controls button:not(:disabled):hover{color:var(--ov-cyan);border-color:rgba(95,224,255,.25)}
+.browse-controls span{text-align:center;font-size:8px;color:var(--ov-muted)}
+
+/* Fix the old three-column definition: there are four visible lead-row children. */
+.lead-row{
+  grid-template-columns:32px 66px minmax(0,1fr) 46px;
+  gap:10px;
+  padding:10px 12px;
+  min-height:68px;
+  border-bottom-color:rgba(255,255,255,.045);
+  transition:background .18s ease,transform .18s ease,box-shadow .18s ease;
+}
+.lead-row:hover{background:rgba(95,224,255,.045);transform:translateX(2px)}
+.lead-row.selected{background:linear-gradient(90deg,rgba(95,224,255,.16),rgba(95,224,255,.035) 58%,transparent);box-shadow:inset 3px 0 var(--ov-cyan)}
+.rank{font:700 10px 'Chakra Petch',sans-serif;text-align:center}
+.lead-thumb{width:66px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:9px;overflow:hidden;border:1px solid rgba(255,255,255,.08);background:#03070d}
+.lead-thumb img{width:100%;height:100%;object-fit:cover;transition:transform .2s ease,filter .2s ease}
+.lead-row:hover .lead-thumb img{transform:scale(1.06);filter:contrast(1.05) saturate(1.05)}
+.lead-thumb i{font-style:normal;font-size:6px;color:var(--ov-muted)}
+.lead-copy b{font-size:10px;line-height:1.35}
+.lead-copy small{font-size:7px;margin-top:5px}
+.lead-row strong{font-size:22px;text-shadow:0 0 14px rgba(95,224,255,.16)}
+
+.ov-focus{padding:17px}
+.focus-head{align-items:center}
+.focus-head small{font-size:8px;letter-spacing:.16em}
+.focus-head h1{font-size:clamp(20px,2.3vw,31px);letter-spacing:-.02em;margin-top:6px}
+.focus-head p{font-size:8px;line-height:1.5}
+.gate-badge{border-radius:11px;padding:9px 14px}
+.gate-badge.paused{color:var(--ov-amber);background:rgba(255,154,86,.06);border-color:rgba(255,154,86,.22)}
+
+.score-board{gap:9px;margin:14px 0}
+.score-primary,.score-metric{border-radius:12px;padding:10px 12px;background:linear-gradient(180deg,rgba(7,17,30,.82),rgba(2,7,14,.72));border-color:rgba(95,224,255,.1)}
+.score-primary b{font-size:32px}
+.score-metric b{font-size:20px}
+.score-metric>i{height:4px;border-radius:99px}.score-metric>i em{border-radius:99px}
+
+/* Make imagery the hero instead of one of four equally tiny floating cards. */
+.instrument-layer{height:calc(100% - 170px);border-radius:15px;background:radial-gradient(circle at 28% 40%,rgba(95,224,255,.08),transparent 47%),rgba(1,5,11,.36);overflow:hidden}
+.instrument{border-radius:14px;background:rgba(5,13,24,.86);box-shadow:0 22px 42px rgba(0,0,0,.35);transition:.2s ease}
+.instrument:hover{transform:translateY(-2px);filter:brightness(1.07)}
+.instrument.imagery{left:2.5%;top:4%;width:63%;height:92%;z-index:5}
+.instrument.permits{right:2.5%;top:4%;width:30%;height:28%;z-index:4}
+.instrument.weather{right:2.5%;top:36%;left:auto;width:30%;height:28%;z-index:3}
+.instrument.structure{right:2.5%;bottom:4%;width:30%;height:28%;z-index:2}
+.instrument header{height:34px;padding:0 11px}
+.instrument-open{height:calc(100% - 34px);padding:13px}
+.instrument.imagery .instrument-image{height:73%;margin:-13px -13px 12px}
+.instrument:not(.imagery) .instrument-image{height:45%}
+.instrument strong{font-size:14px}
+.instrument p{margin:5px 0}
+.instrument-image img{filter:contrast(1.04) saturate(1.05)}
+.instrument-image label{left:9px;right:9px;bottom:9px;border-radius:8px;padding:7px 9px;backdrop-filter:blur(8px)}
+.target-crosshair{width:34px;height:34px;box-shadow:0 0 18px rgba(255,81,108,.65),inset 0 0 13px rgba(255,81,108,.22)}
+
+.gauge{width:92px;height:92px}.gauge span{margin-top:-61px;font-size:25px}.gauge-wrap{padding-top:16px}
+.evidence-line{padding:10px 14px}.evidence-line:hover:not(:disabled){background:rgba(95,224,255,.04)}
+.inspection-panel{padding:12px 14px;max-height:165px}
+.inspection-panel p{font-size:7.5px;line-height:1.55}
+.doctor-panel>header{padding:11px 14px}.doctor-check{padding:8px 13px}
+
+.evidence-overlay{padding:16px;background:rgba(0,3,8,.8);backdrop-filter:blur(7px)}
+.evidence-drawer{width:min(680px,100%);border-radius:22px;padding:19px}
+.drawer-image{border-radius:14px;overflow:hidden}
+
+.ov-telemetry{height:38px;border-radius:14px;padding:0 16px}
+
+@media (max-width:1180px){
+  .ov-shell{overflow:auto}
+  .ov-deck{grid-template-columns:300px minmax(0,1fr);height:auto;min-height:0}
+  .ov-intel{grid-column:1/-1;display:grid;grid-template-columns:220px 1fr 1fr;min-height:260px}
+  .ov-intel .panel-head{grid-column:1/-1}
+  .doctor-panel{max-height:250px}
+}
+
+@media (max-width:820px){
+  .ov-shell{padding:8px;overflow:auto}
+  .ov-top{height:auto;min-height:66px;padding:12px 14px;display:grid;grid-template-columns:1fr auto;gap:6px 10px}
+  .ov-brand small,.ov-mission{display:none}.ov-health{font-size:8px}
+  .ov-bypass{display:grid;grid-template-columns:1fr auto}.ov-bypass small{grid-column:1/-1}.ov-bypass b{margin-left:0}
+  .ov-stats{grid-template-columns:repeat(2,1fr)}.ov-stat:last-child{grid-column:1/-1}
+  .ov-deck{display:flex;flex-direction:column;height:auto;gap:8px}
+  .ov-queue{max-height:520px}.ov-focus{min-height:820px}.ov-intel{display:block;min-height:0}
+  .score-board{grid-template-columns:repeat(3,1fr)}.score-primary{grid-column:1/-1}
+  .instrument-layer{height:620px}
+  .instrument.imagery{left:2%;top:2%;width:96%;height:54%}
+  .instrument.permits{left:2%;right:auto;top:58%;width:31%;height:40%}
+  .instrument.weather{left:34.5%;right:auto;top:58%;width:31%;height:40%}
+  .instrument.structure{right:2%;bottom:2%;width:31%;height:40%}
+  .instrument:not(.imagery) .instrument-image{display:none}
+  .lead-row{grid-template-columns:28px 58px minmax(0,1fr) 40px;padding:9px}.lead-thumb{width:58px;height:44px}
+  .ov-telemetry{display:none}
+}
+
+@media (max-width:520px){
+  .ov-stats{grid-template-columns:1fr 1fr}.ov-stat{min-height:68px;padding:10px 12px}.ov-stat b{font-size:24px}
+  .focus-head{display:block}.gate-badge{margin-top:10px;display:inline-block}
+  .ov-focus{padding:12px;min-height:900px}
+  .instrument-layer{height:700px}
+  .instrument.imagery{height:50%}
+  .instrument.permits,.instrument.weather,.instrument.structure{top:54%;height:44%}
+  .instrument.permits{left:1.5%;width:31%}.instrument.weather{left:34.5%;width:31%}.instrument.structure{right:1.5%;width:31%}
+  .instrument:not(.imagery) strong{font-size:10px}.instrument:not(.imagery) p,.instrument:not(.imagery) small{font-size:6px}
+  .mode-tabs button{font-size:8px}
+}
