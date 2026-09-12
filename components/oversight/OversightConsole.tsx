@@ -154,12 +154,34 @@ function ScoreBoard({profile,audit}:{profile:any,audit:any}) {
 }
 function ScoreMetric({label,value}:{label:string,value:number}) { return <div className="score-metric"><span><small>{label}</small><b>{Math.round(value)}</b></span><i><em style={{width:`${clamp(value)}%`}} /></i></div> }
 
+function hasConcernBoxes(findings:any) {
+  return Array.isArray(findings) && findings.some((finding:any) => finding?.box && Number(finding.box.w) > 0 && Number(finding.box.h) > 0);
+}
+
+function ConcernMarkers({findings}:{findings:any}) {
+  const localized = (Array.isArray(findings) ? findings : []).filter((finding:any) => finding?.box && Number(finding.box.w) > 0 && Number(finding.box.h) > 0).slice(0, 6);
+  if (!localized.length) return null;
+  return <div className="concern-layer" aria-hidden="true">
+    <span className="concern-summary">{localized.length} POSSIBLE CONCERN{localized.length === 1 ? "" : "S"}</span>
+    {localized.map((finding:any,index:number) => {
+      const x = clamp(Number(finding.box.x));
+      const y = clamp(Number(finding.box.y));
+      const width = Math.min(clamp(Number(finding.box.w)), 100 - x);
+      const height = Math.min(clamp(Number(finding.box.h)), 100 - y);
+      const severity = ["low","medium","high"].includes(String(finding.severity || "").toLowerCase()) ? String(finding.severity).toLowerCase() : "medium";
+      return <span key={finding.id || `${index}-${x}-${y}`} className={`concern-box ${severity}`} style={{left:`${x}%`,top:`${y}%`,width:`${width}%`,height:`${height}%`}}>
+        <span className="concern-tag"><i>{index + 1}</i>{String(finding.label || "Possible visual concern")}</span>
+      </span>;
+    })}
+  </div>;
+}
+
 function Instrument({title,records,className,accent,address,onOpen}:{title:string,records:any[],className:string,accent:string,address?:string,onOpen:(r:any)=>void}) {
-  const r=records[0]; const imageUrl=r?.payload?.image_url;
+  const r=records[0]; const imageUrl=r?.payload?.image_url; const findings=r?.payload?.possible_concerns;
   return <article className={`instrument ${className} ${accent} ${r ? "present" : "standby"}`}>
     <header><span>{title}</span><b>{r ? realityLabel[r.reality] || r.reality : "STANDBY"}</b></header>
     <button className="instrument-open" disabled={!r} onClick={() => r && onOpen(r)}>
-      {r ? <>{imageUrl && <div className="instrument-image"><Image src={imageUrl} alt={`Satellite view centered on ${address || r.parcel_id}`} fill sizes="(max-width: 900px) 100vw, 50vw" unoptimized /><span className="target-crosshair" aria-hidden="true"><i/><b/></span><label>{address || r.parcel_id}<small>TARGET ADDRESS POINT · OPEN FOR SOURCE</small></label></div>}<strong>{r.provider}</strong><p>{r.effective_at ? new Date(r.effective_at).toLocaleDateString() : r.payload?.capture_date || "Capture date pending"}</p><small>{Math.round(Number(r.confidence)*100)}% source confidence · click to raise layer</small></> : <><strong>NO RECORD</strong><p>Provider will retry autonomously</p></>}
+      {r ? <>{imageUrl && <div className="instrument-image"><Image src={imageUrl} alt={`Satellite view centered on ${address || r.parcel_id}`} fill sizes="(max-width: 900px) 100vw, 50vw" unoptimized /><ConcernMarkers findings={findings} />{!hasConcernBoxes(findings) && <span className="target-crosshair" aria-hidden="true"><i/><b/></span>}<label>{address || r.parcel_id}<small>{hasConcernBoxes(findings) ? "POSSIBLE CONCERNS OVERLAID · OPEN ANALYSIS" : "TARGET ADDRESS POINT · OPEN FOR SOURCE"}</small></label></div>}<strong>{r.provider}</strong><p>{r.effective_at ? new Date(r.effective_at).toLocaleDateString() : r.payload?.capture_date || (r.payload?.capture_date_status === "provider_does_not_expose_capture_date" ? "Provider date unavailable" : "Capture date pending")}</p><small>{Math.round(Number(r.confidence)*100)}% source confidence · click to raise layer</small></> : <><strong>NO RECORD</strong><p>Provider will retry autonomously</p></>}
     </button>
   </article>
 }
@@ -191,7 +213,10 @@ function inspectionList(profile:any,audit:any,evidence:any[]) {
   const imagery = evidence.find((r:any)=>r.type === "IMAGERY");
   const weather = evidence.find((r:any)=>r.type === "WEATHER");
   const permit = evidence.find((r:any)=>r.type === "PERMIT");
-  if (imagery && !imagery.payload?.capture_date && !imagery.effective_at) items.push("Confirm imagery capture date before treating visual condition as current.");
+  const concernCount = Array.isArray(imagery?.payload?.possible_concerns) ? imagery.payload.possible_concerns.length : 0;
+  if (concernCount) items.push(`${concernCount} possible visual concern${concernCount === 1 ? "" : "s"} surfaced on imagery; inspect the highlighted areas before outreach.`);
+  if (imagery && !imagery.payload?.capture_date && !imagery.effective_at && imagery.payload?.capture_date_status !== "provider_does_not_expose_capture_date") items.push("Confirm imagery capture date before treating visual condition as current.");
+  if (imagery?.payload?.capture_date_status === "provider_does_not_expose_capture_date") items.push("Imagery provider does not expose per-image capture date; freshness is based on retrieval timestamp and should be treated with lower certainty.");
   if (imagery && !["complete","completed","analyzed","reviewed"].includes(String(imagery.payload?.damage_analysis_status || imagery.payload?.analysis_status || "").toLowerCase())) items.push("Roof image still needs visual analysis; inspect shingles, staining, patching and tree impact.");
   if (!weather) items.push("Storm history is still missing; hail/wind exposure can materially change the ranking.");
   if (permit?.payload?.search_result === "no_matching_roofing_permits") items.push("No matching roofing permit found; treat as negative evidence only, not proof of an old roof.");
@@ -204,12 +229,13 @@ function DoctorPanel({audit}:{audit:any}) { if (!audit) return null; return <sec
 
 function EvidenceDrawer({record,onClose}:{record:any,onClose:()=>void}) {
   const payloadEntries = Object.entries(record.payload || {}).filter(([,value]) => value !== null && value !== "" && typeof value !== "object").slice(0,18);
+  const findings = record.payload?.possible_concerns;
   return <div className="evidence-overlay" onMouseDown={onClose}><section className="evidence-drawer glass" onMouseDown={e=>e.stopPropagation()}>
     <header><div><small>EVIDENCE PROVENANCE · ACTIVE LEAD REMAINS VISIBLE BELOW</small><h2>{record.type} · {record.provider}</h2></div><button onClick={onClose}>×</button></header>
     <div className="evidence-meta"><span><small>REALITY</small><b>{record.reality}</b></span><span><small>CONFIDENCE</small><b>{Math.round(Number(record.confidence || 0)*100)}%</b></span><span><small>CAPTURED</small><b>{record.captured_at ? new Date(record.captured_at).toLocaleString() : "—"}</b></span></div>
-    {record.payload?.image_url && <div className="drawer-image"><Image src={record.payload.image_url} alt={`Evidence for ${record.parcel_id}`} fill sizes="(max-width: 760px) 100vw, 680px" unoptimized /><span className="target-crosshair large"><i/><b/></span></div>}
+    {record.payload?.image_url && <div className="drawer-image"><Image src={record.payload.image_url} alt={`Evidence for ${record.parcel_id}`} fill sizes="(max-width: 760px) 100vw, 680px" unoptimized /><ConcernMarkers findings={findings} />{!hasConcernBoxes(findings) && <span className="target-crosshair large"><i/><b/></span>}</div>}
     <div className="source-block"><small>SOURCE REFERENCE</small>{record.source_ref ? <a href={record.source_ref} target="_blank" rel="noreferrer">Open original provider/source ↗</a> : <b>No external source URL recorded</b>}</div>
     <div className="payload-grid">{payloadEntries.map(([key,value])=><div key={key}><small>{key.replaceAll("_"," ")}</small><b>{String(value)}</b></div>)}</div>
-    <footer>This raised layer shows the evidence record used by Oversight. The lead beneath it remains the active property. The center marker is the stored address/coordinate target, not a surveyed parcel boundary.</footer>
+    <footer>This raised layer shows the evidence record used by Oversight. Highlighted boxes are possible visual concerns for contractor inspection, not confirmed damage. The lead beneath it remains the active property.</footer>
   </section></div>
 }
