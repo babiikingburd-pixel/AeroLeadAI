@@ -11,6 +11,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
   const [mode, setMode] = useState<"TOP_20" | "TOP_100" | "TOP_500" | "ALL">("TOP_100");
   const [query, setQuery] = useState("");
   const [openEvidence, setOpenEvidence] = useState<any | null>(null);
+  const [openMap, setOpenMap] = useState(false);
 
   const profiles = useMemo(() => {
     const ranked = [...initial.profiles].sort((a: any, b: any) => Number(a.live_rank ?? 999999) - Number(b.live_rank ?? 999999) || Number(b.rank_score ?? 0) - Number(a.rank_score ?? 0));
@@ -37,11 +38,16 @@ export default function OversightConsole({ initial }: { initial: any }) {
 
   const active = initial.profiles.find((p: any) => p.parcel_id === selectedId) || profiles[0] || null;
   const activeIndex = profiles.findIndex((p: any) => p.parcel_id === active?.parcel_id);
+  const selectLead = (parcelId: string) => {
+    setSelectedId(parcelId);
+    setOpenMap(false);
+    setOpenEvidence(null);
+  };
   const browse = (direction: -1 | 1) => {
     if (!profiles.length) return;
     const base = activeIndex >= 0 ? activeIndex : 0;
     const next = Math.max(0, Math.min(profiles.length - 1, base + direction));
-    setSelectedId(profiles[next].parcel_id);
+    selectLead(profiles[next].parcel_id);
   };
   const evidence = initial.evidence.filter((e: any) => e.parcel_id === active?.parcel_id);
   const type = (name: string) => evidence.filter((e: any) => e.type === name);
@@ -51,6 +57,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
   const audit = active ? initial.audits?.[active.parcel_id] : null;
   const doctorComplete = Object.values(initial.audits || {}).filter((item: any) => item.complete).length;
   const thingsToInspect = inspectionList(active, audit, evidence);
+  const mapSrc = active ? mapUrlFor(active, evidence) : null;
 
   return <main className="ov-shell">
     <div className="ov-grid" /><div className="ov-vignette" />
@@ -84,9 +91,9 @@ export default function OversightConsole({ initial }: { initial: any }) {
         </div>
         <div className="queue-scroll">
           {!profiles.length && <Empty text="No fabricated leads. Properties appear only from collected evidence." />}
-          {profiles.map((p: any, index: number) => { const image = imageryByParcel.get(p.parcel_id); return <button className={`lead-row ${active?.parcel_id === p.parcel_id ? "selected" : ""}`} onClick={() => setSelectedId(p.parcel_id)} key={p.parcel_id}>
+          {profiles.map((p: any, index: number) => { const image = imageryByParcel.get(p.parcel_id); return <button className={`lead-row ${active?.parcel_id === p.parcel_id ? "selected" : ""}`} onClick={() => selectLead(p.parcel_id)} key={p.parcel_id}>
             <span className={`rank ${scoreTone(Number(p.rank_score ?? p.opportunity))}`}>{String(Number(p.live_rank || index + 1)).padStart(2,"0")}</span>
-            <span className="lead-thumb">{image ? <Image src={image.payload.image_url} alt={`Aerial view of ${p.address}`} width={54} height={42} unoptimized /> : <i>NO IMAGE</i>}</span>
+            <span className="lead-thumb">{image ? <Image src={image.payload.image_url} alt={`Aerial view of ${p.address}`} width={66} height={48} unoptimized /> : <i>NO IMAGE</i>}</span>
             <span className="lead-copy"><b>{p.address}</b><small>{p.doctor_gate_status || p.state?.replaceAll("_", " ")} · {Math.round(Number(p.evidence_confidence) * 100)}% confidence</small></span>
             <strong title="Live rank score">{Math.round(Number(p.rank_score ?? p.opportunity ?? 0))}</strong>
           </button>})}
@@ -95,8 +102,11 @@ export default function OversightConsole({ initial }: { initial: any }) {
 
       <section className="ov-focus glass">
         <div className="focus-head">
-          <div><small>ACTIVE PROPERTY · CLICK EVIDENCE TO TRACE SOURCE</small><h1>{active?.address || "Awaiting verified property"}</h1><p>{active ? `${active.parcel_id} · ${active.zip || "ZIP pending"} · live rank #${active.live_rank || "—"}` : "The pipeline is ready; no sample property has been inserted."}</p></div>
-          <div className="gate-badge paused"><small>EVALUATION</small>PAUSED</div>
+          <div><small>ACTIVE PROPERTY · LAYERS STAY ANCHORED TO THIS LEAD</small><h1>{active?.address || "Awaiting verified property"}</h1><p>{active ? `${active.parcel_id} · ${active.zip || "ZIP pending"} · live rank #${active.live_rank || "—"}` : "The pipeline is ready; no sample property has been inserted."}</p></div>
+          <div className="focus-actions">
+            <button className="map-trigger" disabled={!mapSrc} onClick={() => setOpenMap(value => !value)}>{openMap ? "LOWER MAP" : "RAISE MAP"}</button>
+            <div className="gate-badge paused"><small>EVALUATION</small>PAUSED</div>
+          </div>
         </div>
 
         <ScoreBoard profile={active} audit={audit} />
@@ -108,6 +118,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
           <Instrument title="Structure" className="structure" records={type("STRUCTURE")} accent="violet" address={active?.address} onOpen={setOpenEvidence} />
           {!active && <div className="empty-center">NO PLACEHOLDER TARGET<br/><small>real evidence will populate this helm</small></div>}
         </div>
+        {openMap && mapSrc && <MapLayer address={active?.address || active?.parcel_id || "Active property"} src={mapSrc} onClose={() => setOpenMap(false)} />}
       </section>
 
       <aside className="ov-intel glass">
@@ -121,7 +132,7 @@ export default function OversightConsole({ initial }: { initial: any }) {
       </aside>
     </section>
 
-    <footer className="ov-telemetry glass"><span><i className="good"/> EVIDENCE CACHE PERSISTENT</span><span><i className="good"/> RLS ENFORCED</span><span><i className={initial.connectionError ? "bad" : "good"}/> SUPABASE {initial.connectionError ? "DEGRADED" : "CONNECTED"}</span><span className="push">COLLECT → INSPECT → EVALUATE LATER</span></footer>
+    <footer className="ov-telemetry glass"><span><i className="good"/> EVIDENCE CACHE PERSISTENT</span><span><i className="good"/> RLS ENFORCED</span><span><i className={initial.connectionError ? "bad" : "good"}/> SUPABASE {initial.connectionError ? "DEGRADED" : "CONNECTED"}</span><span className="push">COLLECT → INSPECT → COMPLETE → RANK</span></footer>
     {openEvidence && <EvidenceDrawer record={openEvidence} onClose={() => setOpenEvidence(null)} />}
   </main>
 }
@@ -143,17 +154,58 @@ function ScoreBoard({profile,audit}:{profile:any,audit:any}) {
 }
 function ScoreMetric({label,value}:{label:string,value:number}) { return <div className="score-metric"><span><small>{label}</small><b>{Math.round(value)}</b></span><i><em style={{width:`${clamp(value)}%`}} /></i></div> }
 
+function hasConcernBoxes(findings:any) {
+  return Array.isArray(findings) && findings.some((finding:any) => finding?.box && Number(finding.box.w) > 0 && Number(finding.box.h) > 0);
+}
+
+function ConcernMarkers({findings}:{findings:any}) {
+  const localized = (Array.isArray(findings) ? findings : []).filter((finding:any) => finding?.box && Number(finding.box.w) > 0 && Number(finding.box.h) > 0).slice(0, 6);
+  if (!localized.length) return null;
+  return <div className="concern-layer" aria-hidden="true">
+    <span className="concern-summary">{localized.length} POSSIBLE CONCERN{localized.length === 1 ? "" : "S"}</span>
+    {localized.map((finding:any,index:number) => {
+      const x = clamp(Number(finding.box.x));
+      const y = clamp(Number(finding.box.y));
+      const width = Math.min(clamp(Number(finding.box.w)), 100 - x);
+      const height = Math.min(clamp(Number(finding.box.h)), 100 - y);
+      const severity = ["low","medium","high"].includes(String(finding.severity || "").toLowerCase()) ? String(finding.severity).toLowerCase() : "medium";
+      return <span key={finding.id || `${index}-${x}-${y}`} className={`concern-box ${severity}`} style={{left:`${x}%`,top:`${y}%`,width:`${width}%`,height:`${height}%`}}>
+        <span className="concern-tag"><i>{index + 1}</i>{String(finding.label || "Possible visual concern")}</span>
+      </span>;
+    })}
+  </div>;
+}
+
 function Instrument({title,records,className,accent,address,onOpen}:{title:string,records:any[],className:string,accent:string,address?:string,onOpen:(r:any)=>void}) {
-  const r=records[0]; const imageUrl=r?.payload?.image_url;
+  const r=records[0]; const imageUrl=r?.payload?.image_url; const findings=r?.payload?.possible_concerns;
   return <article className={`instrument ${className} ${accent} ${r ? "present" : "standby"}`}>
     <header><span>{title}</span><b>{r ? realityLabel[r.reality] || r.reality : "STANDBY"}</b></header>
     <button className="instrument-open" disabled={!r} onClick={() => r && onOpen(r)}>
-      {r ? <>{imageUrl && <div className="instrument-image"><Image src={imageUrl} alt={`Satellite view centered on ${address || r.parcel_id}`} fill sizes="(max-width: 900px) 100vw, 50vw" unoptimized /><span className="target-crosshair" aria-hidden="true"><i/><b/></span><label>{address || r.parcel_id}<small>TARGET ADDRESS POINT · OPEN FOR SOURCE</small></label></div>}<strong>{r.provider}</strong><p>{r.effective_at ? new Date(r.effective_at).toLocaleDateString() : r.payload?.capture_date || "Capture date pending"}</p><small>{Math.round(Number(r.confidence)*100)}% source confidence · click for provenance</small></> : <><strong>NO RECORD</strong><p>Provider will retry autonomously</p></>}
+      {r ? <>{imageUrl && <div className="instrument-image"><Image src={imageUrl} alt={`Satellite view centered on ${address || r.parcel_id}`} fill sizes="(max-width: 900px) 100vw, 50vw" unoptimized /><ConcernMarkers findings={findings} />{!hasConcernBoxes(findings) && <span className="target-crosshair" aria-hidden="true"><i/><b/></span>}<label>{address || r.parcel_id}<small>{hasConcernBoxes(findings) ? "POSSIBLE CONCERNS OVERLAID · OPEN ANALYSIS" : "TARGET ADDRESS POINT · OPEN FOR SOURCE"}</small></label></div>}<strong>{r.provider}</strong><p>{r.effective_at ? new Date(r.effective_at).toLocaleDateString() : r.payload?.capture_date || (r.payload?.capture_date_status === "provider_does_not_expose_capture_date" ? "Provider date unavailable" : "Capture date pending")}</p><small>{Math.round(Number(r.confidence)*100)}% source confidence · click to raise layer</small></> : <><strong>NO RECORD</strong><p>Provider will retry autonomously</p></>}
     </button>
   </article>
 }
 
 function Gauge({value}:{value:number}) { const pct=Math.round(value*100); return <div className="gauge-wrap"><div className="gauge" style={{background:`conic-gradient(#5fe0ff ${pct*3.6}deg, rgba(255,255,255,.06) 0)`}}><span>{pct}<small>%</small></span></div><p>EVIDENCE CONFIDENCE</p></div> }
+
+function mapUrlFor(profile:any,evidence:any[]) {
+  const structure = evidence.find((record:any) => record.type === "STRUCTURE" && record.payload);
+  const property = evidence.find((record:any) => record.type === "PROPERTY" && record.payload);
+  const latitude = Number(structure?.payload?.latitude ?? property?.payload?.latitude ?? profile?.latitude ?? profile?.lat);
+  const longitude = Number(structure?.payload?.longitude ?? property?.payload?.longitude ?? profile?.longitude ?? profile?.lon);
+  const q = Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? `${latitude},${longitude}`
+    : String(profile?.address || "").trim();
+  if (!q) return null;
+  return `https://www.google.com/maps?q=${encodeURIComponent(q)}&z=20&output=embed`;
+}
+
+function MapLayer({address,src,onClose}:{address:string,src:string,onClose:()=>void}) {
+  return <section className="map-layer" aria-label={`Map layer for ${address}`}>
+    <iframe src={src} title={`Map of ${address}`} loading="lazy" referrerPolicy="no-referrer-when-downgrade" />
+    <div className="map-layer-head"><div><small>HOLOGRAPHIC MAP LAYER · BASE LEAD REMAINS BELOW</small><b>{address}</b></div><button onClick={onClose}>LOWER LAYER</button></div>
+  </section>;
+}
 
 function inspectionList(profile:any,audit:any,evidence:any[]) {
   const items:string[] = [];
@@ -161,7 +213,10 @@ function inspectionList(profile:any,audit:any,evidence:any[]) {
   const imagery = evidence.find((r:any)=>r.type === "IMAGERY");
   const weather = evidence.find((r:any)=>r.type === "WEATHER");
   const permit = evidence.find((r:any)=>r.type === "PERMIT");
-  if (imagery && !imagery.payload?.capture_date && !imagery.effective_at) items.push("Confirm imagery capture date before treating visual condition as current.");
+  const concernCount = Array.isArray(imagery?.payload?.possible_concerns) ? imagery.payload.possible_concerns.length : 0;
+  if (concernCount) items.push(`${concernCount} possible visual concern${concernCount === 1 ? "" : "s"} surfaced on imagery; inspect the highlighted areas before outreach.`);
+  if (imagery && !imagery.payload?.capture_date && !imagery.effective_at && imagery.payload?.capture_date_status !== "provider_does_not_expose_capture_date") items.push("Confirm imagery capture date before treating visual condition as current.");
+  if (imagery?.payload?.capture_date_status === "provider_does_not_expose_capture_date") items.push("Imagery provider does not expose per-image capture date; freshness is based on retrieval timestamp and should be treated with lower certainty.");
   if (imagery && !["complete","completed","analyzed","reviewed"].includes(String(imagery.payload?.damage_analysis_status || imagery.payload?.analysis_status || "").toLowerCase())) items.push("Roof image still needs visual analysis; inspect shingles, staining, patching and tree impact.");
   if (!weather) items.push("Storm history is still missing; hail/wind exposure can materially change the ranking.");
   if (permit?.payload?.search_result === "no_matching_roofing_permits") items.push("No matching roofing permit found; treat as negative evidence only, not proof of an old roof.");
@@ -174,12 +229,13 @@ function DoctorPanel({audit}:{audit:any}) { if (!audit) return null; return <sec
 
 function EvidenceDrawer({record,onClose}:{record:any,onClose:()=>void}) {
   const payloadEntries = Object.entries(record.payload || {}).filter(([,value]) => value !== null && value !== "" && typeof value !== "object").slice(0,18);
+  const findings = record.payload?.possible_concerns;
   return <div className="evidence-overlay" onMouseDown={onClose}><section className="evidence-drawer glass" onMouseDown={e=>e.stopPropagation()}>
-    <header><div><small>EVIDENCE PROVENANCE</small><h2>{record.type} · {record.provider}</h2></div><button onClick={onClose}>×</button></header>
+    <header><div><small>EVIDENCE PROVENANCE · ACTIVE LEAD REMAINS VISIBLE BELOW</small><h2>{record.type} · {record.provider}</h2></div><button onClick={onClose}>×</button></header>
     <div className="evidence-meta"><span><small>REALITY</small><b>{record.reality}</b></span><span><small>CONFIDENCE</small><b>{Math.round(Number(record.confidence || 0)*100)}%</b></span><span><small>CAPTURED</small><b>{record.captured_at ? new Date(record.captured_at).toLocaleString() : "—"}</b></span></div>
-    {record.payload?.image_url && <div className="drawer-image"><Image src={record.payload.image_url} alt={`Evidence for ${record.parcel_id}`} fill sizes="(max-width: 760px) 100vw, 680px" unoptimized /><span className="target-crosshair large"><i/><b/></span></div>}
+    {record.payload?.image_url && <div className="drawer-image"><Image src={record.payload.image_url} alt={`Evidence for ${record.parcel_id}`} fill sizes="(max-width: 760px) 100vw, 680px" unoptimized /><ConcernMarkers findings={findings} />{!hasConcernBoxes(findings) && <span className="target-crosshair large"><i/><b/></span>}</div>}
     <div className="source-block"><small>SOURCE REFERENCE</small>{record.source_ref ? <a href={record.source_ref} target="_blank" rel="noreferrer">Open original provider/source ↗</a> : <b>No external source URL recorded</b>}</div>
     <div className="payload-grid">{payloadEntries.map(([key,value])=><div key={key}><small>{key.replaceAll("_"," ")}</small><b>{String(value)}</b></div>)}</div>
-    <footer>This panel shows the evidence record used by Oversight. The center marker identifies the stored address/coordinate target; it is not a surveyed parcel-boundary overlay.</footer>
+    <footer>This raised layer shows the evidence record used by Oversight. Highlighted boxes are possible visual concerns for contractor inspection, not confirmed damage. The lead beneath it remains the active property.</footer>
   </section></div>
 }

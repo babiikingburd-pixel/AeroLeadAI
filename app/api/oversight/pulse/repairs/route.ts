@@ -3,12 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { createEvidenceProvidersForRequirement } from "@/lib/oversight/providerGroups";
 import { OversightPipeline } from "@/lib/oversight/pipeline";
+import { runNativeRequirement, supportsNativeRequirement } from "@/lib/oversight/nativeWorkers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-// Keep worst-case serial provider work safely below the 60s runtime ceiling.
-// OversightPipeline caps each task at the provider timeout (12s by default),
-// so two tasks leave headroom for Supabase reads/writes and response serialization.
 const BATCH_SIZE = 2;
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -27,6 +25,17 @@ function coords(payload: any) {
   const latitude = Number(payload?.latitude);
   const longitude = Number(payload?.longitude);
   return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {};
+}
+
+async function recordAttempt(db: any, task: any, error: string | null, delayMinutes = 30) {
+  const attempts = Number(task.attempts || 0) + 1;
+  await db.from("oversight_audit_tasks").update({
+    attempts,
+    last_error: error,
+    next_attempt_at: new Date(Date.now() + delayMinutes * 60_000).toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq("parcel_id", task.parcel_id).eq("requirement", task.requirement);
+  return attempts;
 }
 
 export async function POST(request: NextRequest) {
@@ -52,11 +61,11 @@ export async function POST(request: NextRequest) {
     chosen.push(task);
     if (chosen.length >= BATCH_SIZE) break;
   }
-  if (!chosen.length) return NextResponse.json({ ok: true, attempted: 0, repaired: 0, remaining: 0 });
+  if (!chosen.length) return NextResponse.json({ ok: true, attempted: 0, repaired: 0, remaining: 0, nativeWorkers: true });
 
   const ids = chosen.map(x => x.parcel_id);
   const [{ data: profiles, error: profileError }, { data: structures, error: structureError }] = await Promise.all([
-    db.from("roof_profiles").select("parcel_id,address,zip,state").in("parcel_id", ids),
+    db.from("roof_profiles").select("parcel_id,address,zip,state,live_rank").in("parcel_id", ids),
     db.from("evidence_records").select("parcel_id,payload,captured_at").in("parcel_id", ids).eq("type", "STRUCTURE").in("reality", ["REAL_NOW","CACHED_REAL"]).order("captured_at", { ascending: false }),
   ]);
   if (profileError || structureError) return NextResponse.json({ ok: false, error: profileError?.message || structureError?.message }, { status: 500 });
@@ -70,10 +79,19 @@ export async function POST(request: NextRequest) {
     if (!profile) continue;
     const structure = structureByParcel.get(task.parcel_id) || {};
     try {
+      if (supportsNativeRequirement(task.requirement)) {
+        const native = await runNativeRequirement({ db, origin: request.nextUrl.origin, profile, structure, requirement: task.requirement });
+        await recordAttempt(db, task, native.satisfied ? null : `native_${native.provider}_not_satisfied`, native.satisfied ? 360 : 30);
+        results.push({ parcelId: task.parcel_id, requirement: task.requirement, satisfied: native.satisfied, source: native.provider, detail: native.detail || null });
+        continue;
+      }
+
       const providers = createEvidenceProvidersForRequirement(task.requirement);
       if (!providers.length) {
-        await db.from("oversight_audit_tasks").update({ last_error: "handled_by_imagery_pulse", next_attempt_at: new Date(Date.now() + 6 * 60 * 60_000).toISOString(), updated_at: new Date().toISOString() }).eq("parcel_id", task.parcel_id).eq("requirement", task.requirement);
-        results.push({ parcelId: task.parcel_id, requirement: task.requirement, deferred: "imagery_pulse" });
+        const attempts = Number(task.attempts || 0) + 1;
+        const delayMinutes = Math.min(1440, 15 * 2 ** Math.min(attempts, 6));
+        await recordAttempt(db, task, "no_provider_for_requirement", delayMinutes);
+        results.push({ parcelId: task.parcel_id, requirement: task.requirement, satisfied: false, error: "no_provider_for_requirement" });
         continue;
       }
       const result = await new OversightPipeline(db, providers).run({
@@ -84,16 +102,16 @@ export async function POST(request: NextRequest) {
         county: String(structure.county || ""),
         ...coords(structure),
       });
-      await db.from("oversight_audit_tasks").update({ attempts: Number(task.attempts || 0) + 1, last_error: null, next_attempt_at: new Date(Date.now() + 30 * 60_000).toISOString(), updated_at: new Date().toISOString() }).eq("parcel_id", task.parcel_id).eq("requirement", task.requirement);
+      await recordAttempt(db, task, result.degraded ? "provider_degraded" : null, result.degraded ? 60 : 360);
       results.push({ parcelId: task.parcel_id, requirement: task.requirement, evaluation: result.evaluation, providerFailures: result.providerFailures, degraded: result.degraded });
     } catch (error) {
       const attempts = Number(task.attempts || 0) + 1;
       const delayMinutes = Math.min(1440, 15 * 2 ** Math.min(attempts, 6));
       const message = error instanceof Error ? error.message : "repair_failed";
-      await db.from("oversight_audit_tasks").update({ attempts, last_error: message, next_attempt_at: new Date(Date.now() + delayMinutes * 60_000).toISOString(), updated_at: new Date().toISOString() }).eq("parcel_id", task.parcel_id).eq("requirement", task.requirement);
+      await recordAttempt(db, task, message, delayMinutes);
       results.push({ parcelId: task.parcel_id, requirement: task.requirement, error: message });
     }
   }
   const { count: remaining } = await db.from("oversight_audit_tasks").select("parcel_id", { count: "exact", head: true }).eq("status", "READY");
-  return NextResponse.json({ ok: true, attempted: results.length, repaired: results.filter(x => !x.error).length, remaining: remaining || 0, results });
+  return NextResponse.json({ ok: true, attempted: results.length, repaired: results.filter(x => x.satisfied || (!x.error && x.degraded === false)).length, remaining: remaining || 0, nativeWorkers: true, results });
 }
