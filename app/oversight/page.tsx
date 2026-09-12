@@ -4,6 +4,8 @@ import { auditProperty } from "@/lib/oversight/doctor";
 import { loadOversightConsoleData } from "@/lib/oversight/consoleData";
 import "./oversight.css";
 import "./cockpit-mode.css";
+import "./superb.css";
+import "./holo-deck.css";
 export const dynamic = "force-dynamic";
 
 export default async function OversightPage() {
