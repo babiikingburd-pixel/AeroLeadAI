@@ -78,7 +78,7 @@ begin
   else
     if jsonb_typeof(v_permit->'records') = 'array' then
       v_record_count := jsonb_array_length(v_permit->'records');
-      select max(d::date) into v_recent_permit
+      select max(substring(d from 1 for 10)::date) into v_recent_permit
       from (
         select coalesce(item->>'issue_date', item->>'permit_date', item->>'file_date', item->>'date') as d
         from jsonb_array_elements(v_permit->'records') item
