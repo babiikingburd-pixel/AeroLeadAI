@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 import { createEvidenceProvidersForRequirement } from "@/lib/oversight/providerGroups";
 import { OversightPipeline } from "@/lib/oversight/pipeline";
-import { runNativeRequirement, supportsNativeRequirement } from "@/lib/oversight/nativeWorkers";
+import { runSuperbRequirement, supportsNativeRequirement } from "@/lib/oversight/superbWorkers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
     chosen.push(task);
     if (chosen.length >= BATCH_SIZE) break;
   }
-  if (!chosen.length) return NextResponse.json({ ok: true, attempted: 0, repaired: 0, remaining: 0, nativeWorkers: true });
+  if (!chosen.length) return NextResponse.json({ ok: true, attempted: 0, repaired: 0, remaining: 0, nativeWorkers: true, strictCompletion: true });
 
   const ids = chosen.map(x => x.parcel_id);
   const [{ data: profiles, error: profileError }, { data: structures, error: structureError }] = await Promise.all([
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     const structure = structureByParcel.get(task.parcel_id) || {};
     try {
       if (supportsNativeRequirement(task.requirement)) {
-        const native = await runNativeRequirement({ db, origin: request.nextUrl.origin, profile, structure, requirement: task.requirement });
+        const native = await runSuperbRequirement({ db, origin: request.nextUrl.origin, profile, structure, requirement: task.requirement });
         await recordAttempt(db, task, native.satisfied ? null : `native_${native.provider}_not_satisfied`, native.satisfied ? 360 : 30);
         results.push({ parcelId: task.parcel_id, requirement: task.requirement, satisfied: native.satisfied, source: native.provider, detail: native.detail || null });
         continue;
@@ -113,5 +113,5 @@ export async function POST(request: NextRequest) {
     }
   }
   const { count: remaining } = await db.from("oversight_audit_tasks").select("parcel_id", { count: "exact", head: true }).eq("status", "READY");
-  return NextResponse.json({ ok: true, attempted: results.length, repaired: results.filter(x => x.satisfied || (!x.error && x.degraded === false)).length, remaining: remaining || 0, nativeWorkers: true, results });
+  return NextResponse.json({ ok: true, attempted: results.length, repaired: results.filter(x => x.satisfied || (!x.error && x.degraded === false)).length, remaining: remaining || 0, nativeWorkers: true, strictCompletion: true, results });
 }
