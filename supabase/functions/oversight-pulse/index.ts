@@ -120,6 +120,9 @@ async function storeImage(candidate: any) {
       byte_size: bytes.length,
       mime_type: contentType,
       capture_date: null,
+      capture_date_status: "provider_does_not_expose_capture_date",
+      freshness_basis: "retrieval_timestamp_only",
+      analysis_status: "pending",
       damage_analysis_status: "not_analyzed",
     },
   }, { onConflict: "id" });

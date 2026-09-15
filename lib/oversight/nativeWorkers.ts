@@ -68,25 +68,10 @@ async function persist(db: SupabaseClient, input: Parameters<typeof makeEvidence
   return record;
 }
 
-async function latestStoredImage(db: SupabaseClient, parcelId: string) {
-  const { data, error } = await db
-    .from("property_images")
-    .select("property_id,provider,view,storage_path,mime_type,quality_score,fetched_at")
-    .eq("property_id", parcelId)
-    .order("fetched_at", { ascending: false })
-    .limit(20);
-  if (error) throw new Error(`property_image_read_failed: ${error.message}`);
-  const rows = data || [];
-  return rows.find((row: any) => row.view === "overview_tight")
-    || rows.find((row: any) => row.view === "overview_context")
-    || rows[0]
-    || null;
-}
-
 async function latestImageryEvidence(db: SupabaseClient, parcelId: string) {
   const { data, error } = await db
     .from("evidence_records")
-    .select("payload,provider,confidence,effective_at,captured_at")
+    .select("payload,provider,reality,confidence,effective_at,captured_at,source_ref")
     .eq("parcel_id", parcelId)
     .eq("type", "IMAGERY")
     .in("reality", ["REAL_NOW", "CACHED_REAL"])
@@ -94,6 +79,30 @@ async function latestImageryEvidence(db: SupabaseClient, parcelId: string) {
     .limit(30);
   if (error) throw new Error(`imagery_evidence_read_failed: ${error.message}`);
   return (data || []).find((row: any) => row.payload?.storage_path) || null;
+}
+
+function providerDoesNotExposeCaptureDate(image: any) {
+  const provider = `${image?.provider || ""} ${image?.payload?.provider || ""}`.toLowerCase();
+  return ["esri", "world imagery", "google", "mapbox", "nearmap"].some((name) => provider.includes(name));
+}
+
+async function recordCaptureDateLimitation(ctx: NativeContext, image: any) {
+  if (!image?.payload?.storage_path || !providerDoesNotExposeCaptureDate(image)) return image;
+  const payload = {
+    ...image.payload,
+    capture_date: null,
+    capture_date_status: "provider_does_not_expose_capture_date",
+    freshness_basis: "retrieval_timestamp_only",
+  };
+  return persist(ctx.db, {
+    parcelId: String(ctx.profile.parcel_id),
+    type: "IMAGERY",
+    provider: String(image.provider || "aerolead_imagery"),
+    reality: image.reality === "CACHED_REAL" ? "CACHED_REAL" : "REAL_NOW",
+    confidence: confidenceNumber(image.confidence, 0.72),
+    sourceRef: image.source_ref || undefined,
+    payload,
+  });
 }
 
 async function acquireImagery(ctx: NativeContext, force = false) {
@@ -115,7 +124,15 @@ async function acquireImagery(ctx: NativeContext, force = false) {
   }, 38_000);
   if (!imagery?.dataUrl) throw new Error("imagery_agent_returned_no_usable_image");
 
-  const stored = await latestStoredImage(ctx.db, String(ctx.profile.parcel_id));
+  const existing = await latestImageryEvidence(ctx.db, String(ctx.profile.parcel_id));
+  const stored = imagery?.stored?.preferred || (existing?.payload?.storage_path ? {
+    storage_path: existing.payload.storage_path,
+    mime_type: existing.payload.mime_type,
+    view: existing.payload.view || existing.payload.image_role || "overview_tight",
+    provider: existing.payload.provider || existing.provider,
+    fetched_at: existing.payload.fetched_at || existing.captured_at,
+    quality_score: Number(existing.confidence || 0.72) * 100,
+  } : null);
   if (!stored?.storage_path) throw new Error("imagery_returned_but_private_storage_missing");
 
   const captureDate = imagery.capturedDate || null;
@@ -262,57 +279,126 @@ async function runPermitHistory(ctx: NativeContext): Promise<NativeResult> {
   return { satisfied: true, provider: "aerolead_permit_lookup", detail: { records: records.length, verifiedNoMatch: records.length === 0 } };
 }
 
-function swdiRows(body: any): any[] {
-  if (Array.isArray(body)) return body;
-  for (const key of ["results", "result", "data", "records", "features"]) if (Array.isArray(body?.[key])) return body[key];
-  return [];
+const NOAA_STORM_EVENTS_URL = "https://www.ncei.noaa.gov/access/storm-events-database/api/search-events";
+const NOAA_EVENT_TYPES = ["Hail", "High Wind", "Strong Wind", "Thunderstorm Wind", "Tornado"];
+const NOAA_CACHE_TTL_MS = 30 * 60_000;
+const noaaCountyCache = new Map<string, { expiresAt: number; request: Promise<any[]> }>();
+const STATE_NAMES: Record<string, string> = {
+  AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California", CO: "Colorado",
+  CT: "Connecticut", DE: "Delaware", DC: "District of Columbia", FL: "Florida", GA: "Georgia",
+  HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa", KS: "Kansas",
+  KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland", MA: "Massachusetts",
+  MI: "Michigan", MN: "Minnesota", MS: "Mississippi", MO: "Missouri", MT: "Montana",
+  NE: "Nebraska", NV: "Nevada", NH: "New Hampshire", NJ: "New Jersey", NM: "New Mexico",
+  NY: "New York", NC: "North Carolina", ND: "North Dakota", OH: "Ohio", OK: "Oklahoma",
+  OR: "Oregon", PA: "Pennsylvania", RI: "Rhode Island", SC: "South Carolina",
+  SD: "South Dakota", TN: "Tennessee", TX: "Texas", UT: "Utah", VT: "Vermont",
+  VA: "Virginia", WA: "Washington", WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming",
+};
+
+function isoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
-async function swdiYear(dataset: "plsr" | "nx3hail", year: number, location: { latitude: number; longitude: number }) {
-  const latPad = 0.12;
-  const lonPad = 0.16;
-  const west = location.longitude - lonPad;
-  const south = location.latitude - latPad;
-  const east = location.longitude + lonPad;
-  const north = location.latitude + latPad;
-  const range = `${year}0101:${year + 1}0101`;
-  const url = `https://www.ncei.noaa.gov/swdiws/json/${dataset}/${range}/250?bbox=${west},${south},${east},${north}`;
+function titleCase(value: string) {
+  return value.toLowerCase().replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
+function weatherGeography(ctx: NativeContext) {
+  const addressState = String(ctx.profile?.address || "").match(/,\s*([A-Z]{2})(?:\s+\d{5})?\s*$/i)?.[1];
+  const rawState = String(ctx.structure?.state_abbreviation || ctx.structure?.state || addressState || "MN").toUpperCase();
+  const state = STATE_NAMES[rawState] || (Object.values(STATE_NAMES).includes(rawState) ? titleCase(rawState) : null);
+  const parcelCounty = String(ctx.profile?.parcel_id || "").split("-")[0];
+  const rawCounty = String(ctx.structure?.county || ctx.structure?.county_name || ctx.profile?.county || parcelCounty || "");
+  const county = titleCase(rawCounty.replace(/\s+(county|co\.?)$/i, "").trim());
+  return state && county ? { state, county } : null;
+}
+
+async function searchNoaaStormEvents(state: string, county: string, beginDate: string, endDate: string) {
+  const key = `${state}:${county}:${beginDate}:${endDate}`;
+  const cached = noaaCountyCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.request;
+
+  const request = (async () => {
+    const response = await fetch(NOAA_STORM_EVENTS_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", "user-agent": "AeroLeadAI-Oversight-Superb/1.2" },
+      body: JSON.stringify({
+        activeTab: 1,
+        stateList: [state],
+        countyList: [county],
+        eventList: NOAA_EVENT_TYPES,
+        beginDate,
+        endDate,
+        onThisDay: false,
+      }),
+      signal: AbortSignal.timeout(25_000),
+      cache: "no-store",
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(`noaa_storm_events_http_${response.status}`);
+    if (!body || body.error) {
+      const message = body?.error?.title || body?.error?.content || "provider_error";
+      throw new Error(`noaa_storm_events_error: ${String(message).slice(0, 160)}`);
+    }
+    if (!Array.isArray(body.data)) throw new Error("noaa_storm_events_invalid_response");
+    return body.data;
+  })();
+
+  noaaCountyCache.set(key, { expiresAt: Date.now() + NOAA_CACHE_TTL_MS, request });
   try {
-    const response = await fetch(url, { headers: { "user-agent": "AeroLeadAI-Oversight-Superb/1.0" }, signal: AbortSignal.timeout(12_000), cache: "no-store" });
-    if (!response.ok) return [];
-    return swdiRows(await response.json()).map((row: any) => ({ ...row, dataset, query_year: year }));
-  } catch {
-    return [];
+    return await request;
+  } catch (error) {
+    noaaCountyCache.delete(key);
+    throw error;
   }
 }
 
 async function runWeatherHistory(ctx: NativeContext): Promise<NativeResult> {
   const location = coords(ctx.profile, ctx.structure);
-  if (!location) return { satisfied: false, provider: "noaa_swdi", detail: { reason: "coordinates_missing" } };
-  const currentYear = new Date().getUTCFullYear();
-  const years = Array.from({ length: WEATHER_LOOKBACK_YEARS }, (_, index) => currentYear - index);
-  const queries = years.flatMap(year => [swdiYear("plsr", year, location), swdiYear("nx3hail", year, location)]);
-  const resultSets = await Promise.all(queries);
-  const rows = resultSets.flat();
-  const eventRows = rows.filter((row: any) => {
-    const text = `${row.event || row.EVENT || row.EVENT_TYPE || ""} ${row.type || ""}`.toLowerCase();
-    return row.dataset === "nx3hail" || /hail|wind|tornado|thunderstorm/.test(text);
-  });
+  if (!location) return { satisfied: false, provider: "noaa_ncei_storm_events", detail: { reason: "coordinates_missing" } };
+  const geography = weatherGeography(ctx);
+  if (!geography) return { satisfied: false, provider: "noaa_ncei_storm_events", detail: { reason: "state_or_county_missing" } };
+  const end = new Date();
+  end.setUTCMonth(end.getUTCMonth() - 3);
+  const begin = new Date(end);
+  begin.setUTCFullYear(begin.getUTCFullYear() - WEATHER_LOOKBACK_YEARS);
+  const beginDate = isoDate(begin);
+  const endDate = isoDate(end);
+  const eventRows = await searchNoaaStormEvents(geography.state, geography.county, beginDate, endDate);
+  const storedEvents = eventRows.slice(0, 40);
   const payload = {
-    search_result: eventRows.length ? "severe_weather_signals_found" : "no_swdi_signals_in_search_area",
-    source: "NOAA/NCEI Severe Weather Data Inventory",
+    search_result: eventRows.length ? "severe_weather_events_found" : "no_matching_storm_events_in_county_window",
+    source: "NOAA/NCEI Storm Events Database",
+    geography_scope: "county",
+    state: geography.state,
+    county: geography.county,
     lookback_years: WEATHER_LOOKBACK_YEARS,
-    search_radius_note: "Approximate local bounding box around verified property coordinates.",
-    events: eventRows.slice(0, 150),
+    begin_date: beginDate,
+    end_date: endDate,
+    event_types: NOAA_EVENT_TYPES,
+    query_count: 1,
+    successful_queries: 1,
+    failed_queries: 0,
+    search_status: "complete",
+    search_scope_note: "County-level NOAA records linked to a property with verified coordinates; events are corroborating territory evidence, not proof of parcel impact.",
+    property_coordinates: location,
+    events: storedEvents,
     event_count: eventRows.length,
+    events_in_payload: storedEvents.length,
+    event_sample_truncated: eventRows.length > storedEvents.length,
     searched_at: new Date().toISOString(),
-    no_event_caveat: "Absence of SWDI records does not prove no severe weather occurred; it means no qualifying record was returned for this search area/window.",
+    no_event_caveat: "A no-match result means no qualifying county record was returned for this bounded search; it does not prove that no severe weather affected the parcel.",
   };
   await persist(ctx.db, {
-    parcelId: String(ctx.profile.parcel_id), type: "WEATHER", provider: "noaa_swdi", reality: "REAL_NOW", confidence: eventRows.length ? 0.88 : 0.72,
-    sourceRef: "https://www.ncei.noaa.gov/products/severe-weather-data-inventory", payload,
+    parcelId: String(ctx.profile.parcel_id), type: "WEATHER", provider: "noaa_ncei_storm_events", reality: "REAL_NOW", confidence: eventRows.length ? 0.86 : 0.70,
+    sourceRef: "https://www.ncei.noaa.gov/access/storm-events-database", payload,
   });
-  return { satisfied: true, provider: "noaa_swdi", detail: { eventCount: eventRows.length, lookbackYears: WEATHER_LOOKBACK_YEARS } };
+  return {
+    satisfied: true,
+    provider: "noaa_ncei_storm_events",
+    detail: { eventCount: eventRows.length, lookbackYears: WEATHER_LOOKBACK_YEARS, geography: `${geography.county} County, ${geography.state}` },
+  };
 }
 
 export async function runNativeRequirement(ctx: NativeContext): Promise<NativeResult> {
@@ -329,6 +415,14 @@ export async function runNativeRequirement(ctx: NativeContext): Promise<NativeRe
       if (!image?.payload?.storage_path) {
         await acquireImagery(ctx, false);
         image = await latestImageryEvidence(ctx.db, String(ctx.profile.parcel_id));
+      }
+      if (
+        image?.payload?.storage_path
+        && !image?.payload?.capture_date
+        && !image?.effective_at
+        && !image?.payload?.capture_date_status
+      ) {
+        image = await recordCaptureDateLimitation(ctx, image);
       }
       const status = image?.payload?.capture_date_status;
       return {

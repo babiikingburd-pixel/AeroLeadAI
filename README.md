@@ -1,5 +1,19 @@
 # APEX 10.1 Production Launch
 
+## September 2026 production handoff
+
+- `/apex` now reads the live Oversight `roof_profiles` leaderboard and its
+  verified evidence records. It has no demo or placeholder fallback.
+- The property inspector loads the existing private image immediately, can
+  request multi-angle imagery on demand, and persists labels per property and
+  shot in `oversight_property_labels`.
+- Static imagery providers are recorded honestly when they do not expose a
+  capture date; this is a resolved provider limitation, not a fabricated date
+  or an infinite retry.
+- Storm-history completion uses NOAA/NCEI's current Storm Events Database with
+  a bounded ten-year county search. County events are corroborating territory
+  evidence and are never described as proof that a specific parcel was hit.
+
 ## Oversight 1.1 continuation
 
 The command interface is at `/oversight`. It reads the private

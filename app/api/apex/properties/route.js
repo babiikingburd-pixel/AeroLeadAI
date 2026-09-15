@@ -1,252 +1,249 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "../../../../lib/supabaseServer";
-import { eagleViewConfigured, eagleViewConfig } from "../../../../lib/eagleview";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const DEFAULT_CONTRACTOR = "apex roofing";
+const MAX_LIMIT = 100;
+const REALITIES = ["REAL_NOW", "CACHED_REAL"];
+const EVIDENCE_TYPES = ["IMAGERY", "PERMIT", "WEATHER", "STRUCTURE", "PROPERTY"];
 
-/**
- * Real Apex property grid.
- *
- * HARD RULES (do not relax):
- *  - No demo/sample/placeholder properties. Ever. If the DB returns nothing,
- *    this route returns an empty list and says so.
- *  - No derived value is presented as observed. Roof age is computed from
- *    year_built and labelled as an estimate; damage risk is derived from
- *    recorded storm exposure and labelled as exposure, not confirmed damage.
- *  - Imagery is always attributed to its real source. If EagleView imagery
- *    has not been fetched for a property, we say "pending" and fall back to
- *    Esri World Imagery, labelled as Esri — never labelled as EagleView.
- */
 export async function GET(request) {
-  const url = new URL(request.url);
-  const contractorName = (url.searchParams.get("contractor") || DEFAULT_CONTRACTOR).trim();
-  const limit = Math.min(Number(url.searchParams.get("limit") || 24), 100);
+  const requestedLimit = Number(new URL(request.url).searchParams.get("limit") || 48);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(Math.trunc(requestedLimit), MAX_LIMIT))
+    : 48;
+  const db = supabaseServer();
 
-  const supabase = supabaseServer();
-  if (!supabase) {
+  if (!db) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: "Supabase is not configured in this environment.",
-        properties: [],
-        count: 0,
-      },
+      { ok: false, error: "Supabase is not configured in this environment.", properties: [], count: 0 },
       { status: 503 }
     );
   }
 
-  const { data: contractor, error: contractorError } = await supabase
-    .from("contractor_candidates")
-    .select("id, business_name, city, state, service_area_cities, prospect_score")
-    .ilike("business_name", contractorName)
-    .limit(1)
-    .maybeSingle();
-
-  if (contractorError) {
-    return NextResponse.json(
-      { ok: false, error: contractorError.message, properties: [], count: 0 },
-      { status: 500 }
-    );
-  }
-
-  if (!contractor) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `No contractor named "${contractorName}" is registered.`,
-        properties: [],
-        count: 0,
-      },
-      { status: 404 }
-    );
-  }
-
-  const cities = Array.isArray(contractor.service_area_cities)
-    ? contractor.service_area_cities.filter(Boolean)
-    : [];
-
-  if (cities.length === 0) {
-    return NextResponse.json({
-      ok: true,
-      contractor: publicContractor(contractor),
-      properties: [],
-      count: 0,
-      note: "This contractor has no configured service area, so no territory can be scored.",
-    });
-  }
-
-  const { data: rows, error: leadError } = await supabase
-    .from("batch_leads")
+  const profilesResult = await db
+    .from("roof_profiles")
     .select(
-      [
-        "id","address","city","zip","county","lat","lon","year_built",
-        "assessed_value","assessed_year","priority_score","confidence_score",
-        "evidence_confidence","evidence_completeness","apex_tier","apex_rank",
-        "top500_rank","hail_inches","wind_mph","storm_date","human_review",
-        "permit_evidence_status","permit_history_count","image_damage_score",
-        "roof_visual_score","image_evidence_status","evidence_score_reasons",
-        "residential_status","replacement_cost",
-      ].join(",")
+      "parcel_id,address,zip,opportunity,evidence_confidence,commercial_priority,contradictions,corroborations,completion_pct,deep_dive_tier,live_rank,rank_score,review_status,human_review_notes",
+      { count: "exact" }
     )
-    .in("city", cities)
-    .not("excluded", "is", true)
-    .order("priority_score", { ascending: false, nullsFirst: false })
+    .eq("leaderboard_eligible", true)
+    .order("live_rank", { ascending: true, nullsFirst: false })
+    .order("rank_score", { ascending: false })
     .limit(limit);
 
-  if (leadError) {
+  if (profilesResult.error) {
     return NextResponse.json(
-      { ok: false, error: leadError.message, properties: [], count: 0 },
-      { status: 500 }
+      { ok: false, error: profilesResult.error.message, properties: [], count: 0 },
+      { status: 502 }
     );
   }
 
-  const properties = (rows || []).map((row, index) => shapeProperty(row, index));
-  const evCfg = eagleViewConfig();
+  const profiles = profilesResult.data || [];
+  const parcelIds = profiles.map((profile) => profile.parcel_id).filter(Boolean);
+  let evidence = [];
+
+  if (parcelIds.length) {
+    const evidenceResult = await db
+      .from("evidence_records")
+      .select("parcel_id,type,provider,reality,captured_at,effective_at,confidence,payload,content_hash")
+      .in("parcel_id", parcelIds)
+      .in("type", EVIDENCE_TYPES)
+      .in("reality", REALITIES)
+      .order("captured_at", { ascending: false })
+      .limit(3000);
+
+    if (evidenceResult.error) {
+      return NextResponse.json(
+        { ok: false, error: evidenceResult.error.message, properties: [], count: 0 },
+        { status: 502 }
+      );
+    }
+    evidence = evidenceResult.data || [];
+  }
+
+  const latest = latestUsableEvidence(evidence);
+  const properties = profiles.map((profile, index) => shapeProperty(profile, latest, index));
+  const territory = [...new Set(properties.map((property) => property.county && `${property.county}, ${property.state}`).filter(Boolean))];
 
   return NextResponse.json({
     ok: true,
-    source: "AeroLeadAI APEX engine · batch_leads (live)",
+    source: "AeroLeadAI Oversight · roof_profiles + verified evidence",
     generatedAt: new Date().toISOString(),
-    contractor: publicContractor(contractor),
-    territory: cities,
-    eagleView: {
-      configured: eagleViewConfigured(),
-      environment: evCfg.environment,
-      authMode: evCfg.accessToken
-        ? "bearer"
-        : evCfg.apiKey
-        ? "api-key"
-        : evCfg.clientId && evCfg.clientSecret
-        ? "oauth-client-credentials"
-        : "none",
-    },
+    territory: territory.length ? territory : ["Current ranked territory"],
+    totalEligible: profilesResult.count ?? properties.length,
     count: properties.length,
     properties,
   });
 }
-
-function publicContractor(contractor) {
-  return {
-    id: contractor.id,
-    businessName: contractor.business_name,
-    state: contractor.state,
-    prospectScore: contractor.prospect_score,
-  };
+function latestUsableEvidence(rows) {
+  const latest = new Map();
+  for (const row of rows) {
+    const key = `${row.parcel_id}:${row.type}`;
+    const current = latest.get(key);
+    if (!current || (!usableEvidence(current) && usableEvidence(row))) latest.set(key, row);
+  }
+  return latest;
 }
 
-function shapeProperty(row, index) {
-  const currentYear = new Date().getFullYear();
-  const yearBuilt = Number(row.year_built) || null;
-  const structureAge = yearBuilt ? currentYear - yearBuilt : null;
-  const score = row.priority_score != null ? Math.round(Number(row.priority_score)) : null;
-  const hail = row.hail_inches != null ? Number(row.hail_inches) : null;
-  const wind = row.wind_mph != null ? Number(row.wind_mph) : null;
+function usableEvidence(row) {
+  const payload = row?.payload || {};
+  if (payload.reason || payload.error) return false;
+  if (row.type === "IMAGERY") return Boolean(payload.storage_path);
+  return Object.keys(payload).length > 0;
+}
+
+function shapeProperty(profile, evidence, index) {
+  const parcelId = String(profile.parcel_id);
+  const structure = evidence.get(`${parcelId}:STRUCTURE`);
+  const propertyEvidence = evidence.get(`${parcelId}:PROPERTY`);
+  const imagery = evidence.get(`${parcelId}:IMAGERY`);
+  const weather = evidence.get(`${parcelId}:WEATHER`);
+  const permit = evidence.get(`${parcelId}:PERMIT`);
+  const structurePayload = structure?.payload || {};
+  const propertyPayload = propertyEvidence?.payload || {};
+  const location = parseLocation(profile.address, structurePayload, propertyPayload, parcelId);
+  const yearBuilt = integerOrNull(
+    structurePayload.year_built ?? structurePayload.yearBuilt ?? structurePayload.effective_year_built
+  );
+  const stormExposure = summarizeStormEvidence(weather?.payload);
+  const rank = integerOrNull(profile.live_rank);
+  const score = numberOrNull(profile.rank_score ?? profile.opportunity ?? profile.commercial_priority);
+  const evidenceConfidence = numberOrNull(profile.evidence_confidence);
 
   return {
-    id: row.id,
-    address: cleanAddress(row.address),
-    city: row.city,
-    state: "MN",
-    zip: row.zip,
-    county: row.county,
-    lat: row.lat,
-    lon: row.lon,
-    score,
-    scoreBasis: "APEX priority_score (live)",
-    confidence: row.confidence_score != null ? Number(row.confidence_score) : null,
-    evidenceConfidence: row.evidence_confidence != null ? Number(row.evidence_confidence) : null,
-    evidenceCompleteness: row.evidence_completeness != null ? Number(row.evidence_completeness) : null,
-    tier: row.apex_tier || "unranked",
-    rank: row.top500_rank ?? row.apex_rank ?? null,
+    id: parcelId,
+    address: location.street,
+    city: location.city,
+    state: location.state,
+    zip: profile.zip || propertyPayload.zip || null,
+    county: location.county,
+    lat: numberOrNull(structurePayload.latitude ?? propertyPayload.latitude),
+    lon: numberOrNull(structurePayload.longitude ?? propertyPayload.longitude),
+    score: score == null ? null : Math.round(score),
+    scoreBasis: "Current live rank score",
+    confidence: evidenceConfidence == null
+      ? null
+      : Math.round((evidenceConfidence <= 1 ? evidenceConfidence * 100 : evidenceConfidence) * 10) / 10,
+    evidenceCompleteness: numberOrNull(profile.completion_pct),
+    tier: rankTier(rank),
+    rank,
     displayIndex: index + 1,
     yearBuilt,
-    structureAge,
-    roofAgeEstimate: structureAge != null
-      ? `${structureAge} yrs since build (roof age not directly observed)`
-      : "Unknown — build year not on record",
-    assessedValue: row.assessed_value != null ? Number(row.assessed_value) : null,
-    assessedYear: row.assessed_year,
-    replacementCost: row.replacement_cost != null ? Number(row.replacement_cost) : null,
-    stormExposure: {
-      hailInches: hail,
-      windMph: wind,
-      stormDate: row.storm_date,
-      label: stormLabel(hail, wind),
-    },
+    structureAge: yearBuilt ? new Date().getUTCFullYear() - yearBuilt : null,
+    roofAgeEstimate: yearBuilt
+      ? `${new Date().getUTCFullYear() - yearBuilt} years since construction; roof age is not directly observed`
+      : "Unknown — construction year is not on record",
+    assessedValue: numberOrNull(structurePayload.assessed_value ?? structurePayload.assessedValue),
+    stormExposure,
     permit: {
-      status: row.permit_evidence_status || "unchecked",
-      historyCount: row.permit_history_count ?? null,
+      status: permit?.payload?.search_result || (permit ? "search_complete" : "pending"),
+      historyCount: permitCount(permit?.payload),
+      provider: permit?.provider || null,
     },
-    imagery: buildImagery(row),
-    review: Boolean(row.human_review),
-    residentialStatus: row.residential_status || null,
-    reasons: normalizeReasons(row.evidence_score_reasons),
+    imagery: imagery?.payload?.storage_path
+      ? {
+          source: imagery.provider,
+          status: "ready",
+          url: `/api/oversight/image/${encodeURIComponent(parcelId)}?v=${encodeURIComponent(String(imagery.content_hash || imagery.captured_at || "current").slice(0, 16))}`,
+          attribution: imagery.payload.provider || imagery.provider,
+          captureDate: imagery.payload.capture_date || imagery.effective_at || null,
+          captureDateStatus: imagery.payload.capture_date_status || null,
+        }
+      : { source: "none", status: "unavailable", url: null, attribution: "No private image on record" },
+    review: ["needs_review", "flagged"].includes(String(profile.review_status || "").toLowerCase())
+      || Boolean(profile.human_review_notes)
+      || (Array.isArray(profile.contradictions) && profile.contradictions.length > 0),
+    reviewStatus: profile.review_status || "pending",
+    reasons: [
+      ...(Array.isArray(profile.corroborations)
+        ? profile.corroborations.map((label) => ({ label: String(label), kind: "corroboration" }))
+        : []),
+      ...(Array.isArray(profile.contradictions)
+        ? profile.contradictions.map((label) => ({ label: String(label), kind: "contradiction" }))
+        : []),
+    ],
   };
 }
 
-function cleanAddress(address) {
-  if (!address) return "Address unavailable";
-  return String(address).replace(/\s+/g, " ").replace(/,\s*MN\s*$/i, "").trim();
+function parseLocation(address, structure, propertyEvidence, parcelId) {
+  const parts = String(address || "").split(",").map((part) => part.trim()).filter(Boolean);
+  const matchedParts = String(propertyEvidence.matched_address || "").split(",").map((part) => part.trim()).filter(Boolean);
+  const street = parts[0] || structure.address || matchedParts[0] || "Address unavailable";
+  const city = structure.city || parts[1] || matchedParts[1] || "City unavailable";
+  const state = normalizeState(parts[2] || matchedParts[2] || structure.state || "MN");
+  const rawCounty = structure.county || structure.county_name || propertyEvidence.county
+    || String(parcelId || "").split("-")[0]
+    || "Dakota";
+  const county = titleCase(String(rawCounty).replace(/\s+(county|co\.?$)/i, "").trim()) || "Dakota";
+  return { street, city: titleCase(city), state, county };
 }
 
-function stormLabel(hail, wind) {
-  if (hail == null && wind == null) return "No storm exposure on record";
-  const parts = [];
-  if (hail != null) parts.push(`${hail}" hail`);
-  if (wind != null) parts.push(`${wind} mph wind`);
-  return `${parts.join(" · ")} recorded (exposure, not confirmed damage)`;
+function normalizeState(value) {
+  const state = String(value || "").trim().toUpperCase();
+  if (state === "MINNESOTA") return "MN";
+  return /^[A-Z]{2}$/.test(state) ? state : "MN";
 }
 
-function buildImagery(row) {
-  const hasEagleView = row.image_evidence_status === "eagleview";
-  if (hasEagleView) {
-    return {
-      source: "eagleview",
-      status: "ready",
-      url: `/api/eagleview/image?leadId=${encodeURIComponent(row.id)}`,
-      attribution: "EagleView",
-    };
+function titleCase(value) {
+  return String(value || "").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function integerOrNull(value) {
+  const number = numberOrNull(value);
+  return number == null ? null : Math.trunc(number);
+}
+
+function rankTier(rank) {
+  if (!rank) return "unranked";
+  if (rank <= 20) return "top20";
+  if (rank <= 100) return "top100";
+  if (rank <= 500) return "top500";
+  return "ranked";
+}
+
+function permitCount(payload = {}) {
+  if (Array.isArray(payload.records)) return payload.records.length;
+  return integerOrNull(payload.record_count);
+}
+
+function summarizeStormEvidence(payload = {}) {
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  let hailInches = null;
+  let windMph = null;
+  let stormDate = null;
+
+  for (const event of events) {
+    const type = String(event.event_type || event.EVENT_TYPE || event.event || event.type || "").toLowerCase();
+    const magnitude = String(event.magnitude || event.MAGNITUDE || "");
+    const value = Number.parseFloat(magnitude);
+    if (/hail/.test(type) && Number.isFinite(value)) hailInches = Math.max(hailInches || 0, value);
+    if (/wind|thunderstorm/.test(type) && Number.isFinite(value)) {
+      const mph = /kt|knot/i.test(magnitude) ? value * 1.15078 : value;
+      windMph = Math.max(windMph || 0, mph);
+    }
+    if (!stormDate) {
+      stormDate = event.begin_date_time_formatted || event.BEGIN_DATE_TIME || event.date || null;
+    }
   }
 
-  const lat = Number(row.lat);
-  const lon = Number(row.lon);
-  if (Number.isFinite(lat) && Number.isFinite(lon)) {
-    const d = 0.0009;
-    const bbox = `${lon - d},${lat - d},${lon + d},${lat + d}`;
-    return {
-      source: "esri",
-      status: "fallback",
-      url:
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export" +
-        `?bbox=${bbox}&bboxSR=4326&imageSR=3857&size=600,400&format=jpg&f=image`,
-      attribution: "Esri World Imagery — EagleView capture not yet requested",
-    };
-  }
-
+  const eventCount = integerOrNull(payload.event_count) ?? events.length;
+  const geography = payload.county && payload.state ? `${payload.county} County, ${payload.state}` : null;
   return {
-    source: "none",
-    status: "unavailable",
-    url: null,
-    attribution: "No coordinates on record",
+    hailInches: hailInches == null ? null : Math.round(hailInches * 100) / 100,
+    windMph: windMph == null ? null : Math.round(windMph),
+    stormDate,
+    eventCount,
+    scope: payload.geography_scope || null,
+    label: payload.search_status === "complete"
+      ? `${eventCount} NOAA severe-weather event${eventCount === 1 ? "" : "s"} in the bounded ${geography || "territory"} search`
+      : "Storm-history search pending",
   };
-}
-
-function normalizeReasons(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((r) => {
-      if (typeof r === "string") return { label: r, contribution: null };
-      if (r && typeof r === "object") {
-        return {
-          label: r.label || r.signal || "Signal",
-          signal: r.signal || null,
-          contribution: r.contribution ?? null,
-        };
-      }
-      return null;
-    })
-    .filter(Boolean);
 }

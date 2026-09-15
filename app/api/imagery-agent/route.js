@@ -64,7 +64,30 @@ async function writeCache(supabase, key, lat, lon, payload, propertyId) {
     angles: payload.angles,
     capturedAt: fetchedAt,
   });
-  if (!Object.keys(stored.storagePaths).length) return;
+  if (!Object.keys(stored.storagePaths).length) return null;
+
+  const qualityScore = payload.provider === "nearmap"
+    ? 95
+    : payload.provider === "google"
+      ? 90
+      : payload.provider === "mapbox"
+        ? 84
+        : 72;
+  const images = Object.entries(stored.storagePaths).map(([view, storagePath]) => ({
+    property_id: propertyId ? String(propertyId) : null,
+    provider: payload.provider || null,
+    view,
+    storage_path: storagePath,
+    mime_type: stored.mimeTypes[view] || "image/jpeg",
+    content_hash: stored.contentHashes[view] || null,
+    byte_size: stored.byteSizes[view] || null,
+    quality_score: qualityScore,
+    fetched_at: fetchedAt,
+  }));
+  const preferred = images.find((image) => image.view === "overview_tight")
+    || images.find((image) => image.view === "overview_context")
+    || images[0]
+    || null;
 
   const record = {
     cache_key: key,
@@ -82,40 +105,44 @@ async function writeCache(supabase, key, lat, lon, payload, propertyId) {
     fetched_at: fetchedAt,
   };
   const { error: cacheError } = await supabase.from("imagery_manifests").upsert(record, { onConflict: "cache_key" });
-  if (cacheError) throw cacheError;
-  const { error: historyError } = await supabase.from("imagery_manifest_history").insert(record);
-  if (historyError) throw historyError;
+  if (cacheError) console.warn("[imagery-agent] optional manifest write skipped", cacheError.message);
+  const historyResult = await supabase.from("imagery_manifest_history").insert(record);
+  if (historyResult.error) console.warn("[imagery-agent] optional history write skipped", historyResult.error.message);
 
   if (propertyId) {
-    const imageRows = Object.entries(stored.storagePaths).map(([view, storagePath]) => ({
-      property_id: String(propertyId),
-      provider: payload.provider || null,
-      view,
-      image_kind: view.startsWith("vantage") ? "street_view" : "property_overview",
-      storage_path: storagePath,
+    const imageRows = images.map((image) => ({
+      property_id: image.property_id,
+      provider: image.provider,
+      view: image.view,
+      image_kind: image.view.startsWith("vantage") ? "street_view" : "property_overview",
+      storage_path: image.storage_path,
       image_url: null,
-      quality_score: payload.provider === "nearmap" ? 95 : payload.provider === "google" ? 90 : payload.provider === "mapbox" ? 84 : 72,
+      quality_score: image.quality_score,
       evidence_status: "fetched",
-      fetched_at: fetchedAt,
-      content_hash: stored.contentHashes[view] || null,
-      byte_size: stored.byteSizes[view] || null,
-      mime_type: stored.mimeTypes[view] || null,
+      fetched_at: image.fetched_at,
+      content_hash: image.content_hash,
+      byte_size: image.byte_size,
+      mime_type: image.mime_type,
     }));
     const { error: imageError } = await supabase.from("property_images").upsert(imageRows, { onConflict: "property_id,view" });
-    if (imageError) console.warn("[imagery-agent] property image metadata write failed", imageError.message);
+    if (imageError) console.warn("[imagery-agent] optional legacy property image metadata skipped", imageError.message);
   }
 
-  const { data: historyRows, error: historyReadError } = await supabase
-    .from("imagery_manifest_history")
-    .select("id,storage_paths,fetched_at")
-    .eq("cache_key", key)
-    .order("fetched_at", { ascending: false })
-    .limit(20);
-  if (!historyReadError && (historyRows || []).length > CACHE_HISTORY_LIMIT) {
-    const expired = historyRows.slice(CACHE_HISTORY_LIMIT);
-    await removeStoragePaths(supabase, expired).catch((error) => console.warn("[imagery-agent] history storage cleanup failed", error.message));
-    await supabase.from("imagery_manifest_history").delete().in("id", expired.map((row) => row.id));
+  if (!historyResult.error) {
+    const { data: historyRows, error: historyReadError } = await supabase
+      .from("imagery_manifest_history")
+      .select("id,storage_paths,fetched_at")
+      .eq("cache_key", key)
+      .order("fetched_at", { ascending: false })
+      .limit(20);
+    if (!historyReadError && (historyRows || []).length > CACHE_HISTORY_LIMIT) {
+      const expired = historyRows.slice(CACHE_HISTORY_LIMIT);
+      await removeStoragePaths(supabase, expired).catch((error) => console.warn("[imagery-agent] history storage cleanup failed", error.message));
+      await supabase.from("imagery_manifest_history").delete().in("id", expired.map((row) => row.id));
+    }
   }
+
+  return { propertyId: propertyId ? String(propertyId) : null, provider: payload.provider || null, fetchedAt, images, preferred };
 }
 
 function bearingBetween(lat1, lon1, lat2, lon2) {
@@ -369,7 +396,8 @@ export async function POST(req) {
   const { lat, lon, force, lite, historical, leadId, propertyId } = await req.json();
   if (!isValidLatLon(lat, lon)) return Response.json({ error: "Valid lat/lon required" }, { status: 400 });
 
-  const memKey = `img:${(+lat).toFixed(5)},${(+lon).toFixed(5)}:${lite ? "lite" : "full"}`;
+  const requestedPropertyId = leadId || propertyId || "anonymous";
+  const memKey = `img:${(+lat).toFixed(5)},${(+lon).toFixed(5)}:${lite ? "lite" : "full"}:${requestedPropertyId}`;
   if (!force) {
     const mem = cacheGet(memKey);
     if (mem) return Response.json({ ...mem, cached: true, cacheSource: "memory" });
@@ -381,10 +409,31 @@ export async function POST(req) {
   if (supabase && !force) {
     const cached = await readCache(supabase, key);
     if (cached) {
+      const storedImages = Object.entries(cached.storage_paths || {}).map(([view, storagePath]) => ({
+        property_id: cached.property_id || null,
+        provider: cached.provider || null,
+        view,
+        storage_path: storagePath,
+        mime_type: cached.mime_types?.[view] || "image/jpeg",
+        content_hash: cached.content_hashes?.[view] || null,
+        byte_size: cached.byte_sizes?.[view] || null,
+        quality_score: cached.provider === "nearmap" ? 95 : cached.provider === "google" ? 90 : cached.provider === "mapbox" ? 84 : 72,
+        fetched_at: cached.fetched_at,
+      }));
       const payload = {
         angles: cached.angles || {}, sweep: [], notes: [`Served from cache (fetched ${cached.fetched_at}).`],
         resolution: cached.resolution || {}, provider: cached.provider, dataUrl: (cached.angles || {}).overview_tight || null,
         capturedDate: null, cached: true, cacheSource: "supabase", cachedAt: cached.fetched_at,
+        stored: {
+          propertyId: cached.property_id || null,
+          provider: cached.provider || null,
+          fetchedAt: cached.fetched_at,
+          images: storedImages,
+          preferred: storedImages.find((image) => image.view === "overview_tight")
+            || storedImages.find((image) => image.view === "overview_context")
+            || storedImages[0]
+            || null,
+        },
       };
       cacheSet(memKey, payload, MEM_CACHE_TTL_MS);
       return Response.json(payload);
@@ -427,7 +476,8 @@ export async function POST(req) {
 
   if (supabase) {
     try {
-      await writeCache(supabase, key, lat, lon, payload, leadId || propertyId || null);
+      const stored = await writeCache(supabase, key, lat, lon, payload, leadId || propertyId || null);
+      if (stored) payload.stored = stored;
     } catch (error) {
       console.warn("[imagery-agent] compact persistence failed", error.message);
       payload.notes.push("Imagery was returned, but compact private-storage persistence failed for this request.");

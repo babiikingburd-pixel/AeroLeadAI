@@ -2,6 +2,9 @@
   "name": "aeroleadai-v23-gatekeeper-clean-audit",
   "version": "23.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "apex:14-audit": "node scripts/apex14-max-audit.mjs",
     "dev": "next dev -p 5000",
