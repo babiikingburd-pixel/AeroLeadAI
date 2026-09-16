@@ -39,14 +39,38 @@ export default function PropertyIntelligence({ property, onClose }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState(null);
-  const [mode, setMode] = useState("box"); // box | pan
+  const [mode, setMode] = useState("box");
   const [saveState, setSaveState] = useState(null);
   const [imageReady, setImageReady] = useState(false);
   const requestIdRef = useRef(0);
   const imgRef = useRef(null);
   const stageRef = useRef(null);
 
-  const fetchImagery = useCallback(async () => {
+  const seedStored = useCallback(() => {
+    if (!property.imagery?.url) return false;
+    const url = property.imagery.url;
+    if (typeof url === "string" && /[?&](key|access_token|apikey)=/i.test(url)) return false;
+    setImagery({
+      shots: {
+        stored_overview: {
+          url,
+          source: property.imagery.source || "stored",
+        },
+      },
+      providerNote: property.imagery.attribution || "Existing private image — paid Street View not requested",
+    });
+    setActiveShot("stored_overview");
+    return true;
+  }, [property.imagery]);
+
+  const fetchImagery = useCallback(async (paid) => {
+    if (!paid) {
+      if (seedStored()) return;
+      if (property.lat == null || property.lon == null) {
+        setImageryError("No coordinates on record for this property.");
+        return;
+      }
+    }
     if (property.lat == null || property.lon == null) {
       setImageryError("No coordinates on record for this property.");
       return;
@@ -54,18 +78,6 @@ export default function PropertyIntelligence({ property, onClose }) {
     const requestId = ++requestIdRef.current;
     setImageryLoading(true);
     setImageryError(null);
-    if (property.imagery?.url) {
-      setImagery({
-        shots: {
-          stored_overview: {
-            url: property.imagery.url,
-            source: property.imagery.source || "stored",
-          },
-        },
-        providerNote: property.imagery.attribution || "Existing private image",
-      });
-      setActiveShot("stored_overview");
-    }
     try {
       const res = await fetch("/api/imagery-agent", {
         method: "POST",
@@ -76,7 +88,8 @@ export default function PropertyIntelligence({ property, onClose }) {
           lon: property.lon,
           leadId: property.id,
           propertyId: property.id,
-          lite: false,
+          lite: !paid,
+          paid: paid ? 1 : 0,
         }),
       });
       const data = await res.json();
@@ -87,23 +100,24 @@ export default function PropertyIntelligence({ property, onClose }) {
       }
       const shots = Object.fromEntries(
         Object.entries(data.angles || {})
-          .filter(([, url]) => typeof url === "string" && url.startsWith("data:image/"))
+          .filter(([, url]) => typeof url === "string" && url.startsWith("data:image/") && !/[?&](key|access_token|apikey)=/i.test(url))
           .map(([key, url]) => [key, {
             url,
             source: data.provider || "unavailable",
             resolution: data.resolution?.[key] || null,
+            bearingToProperty: (data.sweep || []).find((item) => item.key === key)?.bearingToProperty ?? null,
           }])
       );
       if (!Object.keys(shots).length) {
         setImageryError("Imagery provider returned no usable shots.");
         return;
       }
-      const normalized = {
-        shots,
+      setImagery((prev) => ({
+        shots: { ...(prev?.shots || {}), ...shots },
         providerNote: Array.isArray(data.notes) ? data.notes.join(" ") : data.provider || null,
         capturedDate: data.capturedDate || null,
-      };
-      setImagery(normalized);
+        paid: Boolean(data.paid),
+      }));
       const firstKey =
         OVERVIEW_ANGLE_ORDER.find((key) => shots[key]?.url) ||
         Object.keys(shots).find((key) => shots[key]?.url);
@@ -114,10 +128,10 @@ export default function PropertyIntelligence({ property, onClose }) {
     } finally {
       if (requestId === requestIdRef.current) setImageryLoading(false);
     }
-  }, [property.id, property.imagery, property.lat, property.lon]);
+  }, [property.id, property.lat, property.lon, seedStored]);
 
   useEffect(() => {
-    fetchImagery();
+    fetchImagery(false);
   }, [fetchImagery]);
 
   const shotKeys = useMemo(() => {
@@ -326,6 +340,18 @@ export default function PropertyIntelligence({ property, onClose }) {
                 })}
               </div>
               {imagery?.providerNote && <p className="hint">{imagery.providerNote}</p>}
+              <div className="row">
+                <button
+                  className="primary"
+                  onClick={() => fetchImagery(true)}
+                  disabled={imageryLoading || property.lat == null || property.lon == null}
+                >
+                  {imageryLoading ? "Loading shots…" : "Load paid Street View"}
+                </button>
+              </div>
+              <p className="hint">
+                Free path is the stored private image or Esri World Imagery. Street View is fetched server-side only after this button, with heading equal to the bearing from each panorama to the parcel.
+              </p>
             </div>
 
             <div className="side-block">
