@@ -108,7 +108,6 @@ async function recordCaptureDateLimitation(ctx: NativeContext, image: any) {
 async function acquireImagery(ctx: NativeContext, force = false) {
   const location = coords(ctx.profile, ctx.structure);
   if (!location) throw new Error("imagery_requires_verified_coordinates");
-  const rank = Number(ctx.profile?.live_rank || 999999);
   const imagery = await fetchJson(`${ctx.origin}/api/imagery-agent`, {
     method: "POST",
     headers: internalHeaders(),
@@ -118,7 +117,8 @@ async function acquireImagery(ctx: NativeContext, force = false) {
       address: ctx.profile.address,
       leadId: ctx.profile.parcel_id,
       propertyId: ctx.profile.parcel_id,
-      lite: rank > 20,
+      lite: true,
+      paid: false,
       force,
     }),
   }, 38_000);

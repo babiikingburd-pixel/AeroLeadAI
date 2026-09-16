@@ -88,8 +88,8 @@ export default function PropertyIntelligence({ property, onClose }) {
           lon: property.lon,
           leadId: property.id,
           propertyId: property.id,
-          lite: !paid,
-          paid: paid ? 1 : 0,
+          lite: paid ? false : true,
+          paid: paid ? true : false,
         }),
       });
       const data = await res.json();

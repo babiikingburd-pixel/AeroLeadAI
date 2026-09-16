@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { clampPropertyLimit, clampPropertyOffset, summarizeRankCounts, PROPERTY_PAGE_DEFAULT } from "../../../../lib/apex/propertyLimit";
 import { supabaseServer } from "../../../../lib/supabaseServer";
 
 export const dynamic = "force-dynamic";
@@ -7,17 +8,17 @@ export const revalidate = 0;
 const MAX_LIMIT = 500;
 const REALITIES = ["REAL_NOW", "CACHED_REAL"];
 const EVIDENCE_TYPES = ["IMAGERY", "PERMIT", "WEATHER", "STRUCTURE", "PROPERTY"];
+const EVIDENCE_CHUNK = 80;
 
 export async function GET(request) {
-  const requestedLimit = Number(new URL(request.url).searchParams.get("limit") || 100);
-  const limit = Number.isFinite(requestedLimit)
-    ? Math.max(1, Math.min(Math.trunc(requestedLimit), MAX_LIMIT))
-    : 100;
+  const url = new URL(request.url);
+  const limit = clampPropertyLimit(url.searchParams.get("limit") || PROPERTY_PAGE_DEFAULT, { max: MAX_LIMIT });
+  const offset = clampPropertyOffset(url.searchParams.get("offset") || 0);
   const db = supabaseServer();
 
   if (!db) {
     return NextResponse.json(
-      { ok: false, error: "Supabase is not configured in this environment.", properties: [], count: 0 },
+      { ok: false, error: "Supabase is not configured in this environment.", properties: [], count: 0, top100Count: 0, top500Count: 0, loadedLimit: limit, offset },
       { status: 503 }
     );
   }
@@ -31,11 +32,11 @@ export async function GET(request) {
     .eq("leaderboard_eligible", true)
     .order("live_rank", { ascending: true, nullsFirst: false })
     .order("rank_score", { ascending: false })
-    .limit(limit);
+    .range(offset, offset + limit - 1);
 
   if (profilesResult.error) {
     return NextResponse.json(
-      { ok: false, error: profilesResult.error.message, properties: [], count: 0 },
+      { ok: false, error: profilesResult.error.message, properties: [], count: 0, top100Count: 0, top500Count: 0, loadedLimit: limit, offset },
       { status: 502 }
     );
   }
@@ -44,29 +45,55 @@ export async function GET(request) {
   const parcelIds = profiles.map((profile) => profile.parcel_id).filter(Boolean);
   let evidence = [];
 
-  if (parcelIds.length) {
-    const evidenceResult = await db
-      .from("evidence_records")
-      .select("parcel_id,type,provider,reality,captured_at,effective_at,confidence,payload,content_hash")
-      .in("parcel_id", parcelIds)
-      .in("type", EVIDENCE_TYPES)
-      .in("reality", REALITIES)
-      .order("captured_at", { ascending: false })
-      .limit(3000);
-
-    if (evidenceResult.error) {
-      return NextResponse.json(
-        { ok: false, error: evidenceResult.error.message, properties: [], count: 0 },
-        { status: 502 }
-      );
-    }
-    evidence = evidenceResult.data || [];
+  try {
+    evidence = await loadEvidence(db, parcelIds);
+  } catch (error) {
+    return NextResponse.json(
+      { ok: false, error: error.message, properties: [], count: 0, top100Count: 0, top500Count: 0, loadedLimit: limit, offset },
+      { status: 502 }
+    );
   }
 
   const latest = latestUsableEvidence(evidence);
-  const properties = profiles.map((profile, index) => shapeProperty(profile, latest, index));
+  const properties = profiles.map((profile, index) => shapeProperty(profile, latest, offset + index));
   const territory = [...new Set(properties.map((property) => property.county && `${property.county}, ${property.state}`).filter(Boolean))];
+  const counts = await loadRankCounts(db, properties);
 
+  return NextResponse.json({
+    ok: true,
+    source: "AeroLeadAI Oversight · roof_profiles + verified evidence",
+    generatedAt: new Date().toISOString(),
+    territory: territory.length ? territory : ["Current ranked territory"],
+    totalEligible: profilesResult.count ?? properties.length,
+    top100Count: counts.top100Count,
+    top500Count: counts.top500Count,
+    loadedLimit: limit,
+    offset,
+    count: properties.length,
+    properties,
+  });
+}
+
+async function loadEvidence(db, parcelIds) {
+  const rows = [];
+  for (let index = 0; index < parcelIds.length; index += EVIDENCE_CHUNK) {
+    const chunk = parcelIds.slice(index, index + EVIDENCE_CHUNK);
+    if (!chunk.length) continue;
+    const evidenceResult = await db
+      .from("evidence_records")
+      .select("parcel_id,type,provider,reality,captured_at,effective_at,confidence,payload,content_hash")
+      .in("parcel_id", chunk)
+      .in("type", EVIDENCE_TYPES)
+      .in("reality", REALITIES)
+      .order("captured_at", { ascending: false })
+      .limit(800);
+    if (evidenceResult.error) throw new Error(evidenceResult.error.message);
+    rows.push(...(evidenceResult.data || []));
+  }
+  return rows;
+}
+
+async function loadRankCounts(db, loadedProperties) {
   const top100Result = await db
     .from("roof_profiles")
     .select("parcel_id", { count: "exact", head: true })
@@ -80,19 +107,25 @@ export async function GET(request) {
     .gt("live_rank", 0)
     .lte("live_rank", 500);
 
-  return NextResponse.json({
-    ok: true,
-    source: "AeroLeadAI Oversight · roof_profiles + verified evidence",
-    generatedAt: new Date().toISOString(),
-    territory: territory.length ? territory : ["Current ranked territory"],
-    totalEligible: profilesResult.count ?? properties.length,
+  const fromQueries = {
     top100Count: top100Result.error ? null : (top100Result.count ?? 0),
     top500Count: top500Result.error ? null : (top500Result.count ?? 0),
-    loadedLimit: limit,
-    count: properties.length,
-    properties,
-  });
+  };
+
+  if (fromQueries.top100Count != null && fromQueries.top500Count != null) return fromQueries;
+
+  const census = await db
+    .from("roof_profiles")
+    .select("live_rank")
+    .eq("leaderboard_eligible", true)
+    .gt("live_rank", 0)
+    .lte("live_rank", 500)
+    .limit(500);
+  if (!census.error) return summarizeRankCounts(census.data || []);
+
+  return summarizeRankCounts(loadedProperties.map((property) => property.rank));
 }
+
 function latestUsableEvidence(rows) {
   const latest = new Map();
   for (const row of rows) {
