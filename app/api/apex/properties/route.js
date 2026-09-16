@@ -4,15 +4,15 @@ import { supabaseServer } from "../../../../lib/supabaseServer";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const MAX_LIMIT = 100;
+const MAX_LIMIT = 500;
 const REALITIES = ["REAL_NOW", "CACHED_REAL"];
 const EVIDENCE_TYPES = ["IMAGERY", "PERMIT", "WEATHER", "STRUCTURE", "PROPERTY"];
 
 export async function GET(request) {
-  const requestedLimit = Number(new URL(request.url).searchParams.get("limit") || 48);
+  const requestedLimit = Number(new URL(request.url).searchParams.get("limit") || 100);
   const limit = Number.isFinite(requestedLimit)
     ? Math.max(1, Math.min(Math.trunc(requestedLimit), MAX_LIMIT))
-    : 48;
+    : 100;
   const db = supabaseServer();
 
   if (!db) {
@@ -67,12 +67,28 @@ export async function GET(request) {
   const properties = profiles.map((profile, index) => shapeProperty(profile, latest, index));
   const territory = [...new Set(properties.map((property) => property.county && `${property.county}, ${property.state}`).filter(Boolean))];
 
+  const top100Result = await db
+    .from("roof_profiles")
+    .select("parcel_id", { count: "exact", head: true })
+    .eq("leaderboard_eligible", true)
+    .gt("live_rank", 0)
+    .lte("live_rank", 100);
+  const top500Result = await db
+    .from("roof_profiles")
+    .select("parcel_id", { count: "exact", head: true })
+    .eq("leaderboard_eligible", true)
+    .gt("live_rank", 0)
+    .lte("live_rank", 500);
+
   return NextResponse.json({
     ok: true,
     source: "AeroLeadAI Oversight · roof_profiles + verified evidence",
     generatedAt: new Date().toISOString(),
     territory: territory.length ? territory : ["Current ranked territory"],
     totalEligible: profilesResult.count ?? properties.length,
+    top100Count: top100Result.error ? null : (top100Result.count ?? 0),
+    top500Count: top500Result.error ? null : (top500Result.count ?? 0),
+    loadedLimit: limit,
     count: properties.length,
     properties,
   });
