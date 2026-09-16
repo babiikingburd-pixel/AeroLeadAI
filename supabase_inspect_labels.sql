@@ -1,0 +1,5 @@
+-- Deprecated. Do not run this file.
+-- Inspect labels live in supabase/migrations:
+--   20260915174557_production_handoff_and_property_labels.sql
+--   20260916040000_inspect_labels_service_role_only.sql
+-- Those migrations use service-role-only grants. They do not create using (true) policies.
