@@ -12,13 +12,14 @@ export default function ApexGridPage() {
   const [error, setError] = useState(null);
   const [contractor, setContractor] = useState("apex roofing");
   const [draft, setDraft] = useState("apex roofing");
+  const [limit, setLimit] = useState(100);
 
-  const load = useCallback(async (name) => {
+  const load = useCallback(async (name, nextLimit = limit) => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(
-        `/api/apex/properties?contractor=${encodeURIComponent(name)}&limit=24`,
+        `/api/apex/properties?contractor=${encodeURIComponent(name)}&limit=${nextLimit}`,
         { cache: "no-store" }
       );
       const data = await res.json();
@@ -34,11 +35,11 @@ export default function ApexGridPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [limit]);
 
   useEffect(() => {
-    load(contractor);
-  }, [contractor, load]);
+    load(contractor, limit);
+  }, [contractor, limit, load]);
 
   const properties = payload?.properties || [];
 
@@ -51,21 +52,14 @@ export default function ApexGridPage() {
           <p>
             {payload?.contractor?.businessName
               ? `${payload.contractor.businessName} · ${(payload.territory || []).join(", ")}`
-              : "Territory scoring from batch_leads"}
+              : "Live ranked territory — PR 39 UI only. Production data path is PR 38 /apex."}
           </p>
-          {payload?.generatedAt && (
-            <p className="timestamp">
-              Live read {new Date(payload.generatedAt).toLocaleString()} ·{" "}
-              {payload.eagleView?.configured
-                ? `EagleView ${payload.eagleView.environment} (${payload.eagleView.authMode})`
-                : "EagleView not configured — imagery on inspect"}
-            </p>
-          )}
         </div>
 
         <div className="stats">
-          <Stat label="TERRITORY LEADS" value={properties.length} />
-          <Stat label="TOP 500" value={properties.filter((p) => p.tier === "top500").length} />
+          <Stat label="TOP 100 ON FILE" value={payload?.top100Count ?? "—"} />
+          <Stat label="TOP 500 ON FILE" value={payload?.top500Count ?? "—"} />
+          <Stat label="LOADED" value={properties.length} />
           <Stat label="HUMAN REVIEW" value={properties.filter((p) => p.review).length} />
         </div>
       </header>
@@ -81,35 +75,25 @@ export default function ApexGridPage() {
           }}
           placeholder="apex roofing"
         />
+        <button onClick={() => setLimit(100)} disabled={loading || limit === 100}>Load Top 100</button>
+        <button onClick={() => setLimit(500)} disabled={loading || limit === 500}>Load Top 500</button>
         <button
           onClick={() => {
             const name = draft.trim() || "apex roofing";
             setContractor(name);
-            load(name);
+            load(name, limit);
           }}
           disabled={loading}
         >
           {loading ? "Scanning…" : "Refresh"}
         </button>
-        <a className="back-link" href="/twincities/contractor-prospects">
-          ← Contractor Prospect Bench
-        </a>
+        <span className="control-note">Loaded cards are not a Top 500 by themselves. Counts come from live_rank on roof_profiles.</span>
       </div>
 
       {loading && <div className="loading">Reading live APEX scores…</div>}
-
-      {error && (
-        <div className="error-panel">
-          <strong>Could not load territory.</strong>
-          <p>{error}</p>
-        </div>
-      )}
-
+      {error && (<div className="error-panel"><strong>Could not load territory.</strong><p>{error}</p></div>)}
       {!loading && !error && properties.length === 0 && (
-        <div className="error-panel">
-          <strong>No qualifying properties in this territory.</strong>
-          <p>The engine returned zero rows for this service area. Nothing is invented to fill the grid.</p>
-        </div>
+        <div className="error-panel"><strong>No qualifying properties in this territory.</strong><p>Zero rows. Nothing is invented to fill the grid.</p></div>
       )}
 
       <section className="property-grid">
@@ -119,47 +103,14 @@ export default function ApexGridPage() {
               {property.imagery?.url ? (
                 <img src={property.imagery.url} alt={property.address} loading="lazy" />
               ) : (
-                <div className="no-image">
-                  <span>—</span>
-                  <small>Open to inspect</small>
-                </div>
+                <div className="no-image"><span>—</span><small>Open to inspect</small></div>
               )}
               <div className={`score score-${scoreClass(property.score)}`}>{property.score ?? "—"}</div>
-              <div className={`imagery-tag tag-${property.imagery?.source}`}>
-                {property.imagery?.source === "eagleview"
-                  ? "EAGLEVIEW"
-                  : property.imagery?.source === "esri"
-                    ? "ESRI"
-                    : "NO IMAGE"}
-              </div>
             </div>
             <div className="card-body">
-              <div className="rank">
-                #{property.displayIndex}
-                {property.tier === "top500" && <em> · TOP500</em>}
-              </div>
+              <div className="rank">#{property.displayIndex}{property.rank ? ` · rank ${property.rank}` : ""}</div>
               <h3>{property.address}</h3>
-              <p>
-                {property.city}, {property.state} {property.zip}
-              </p>
-              <div className="mini-data">
-                <span>
-                  Built<strong>{property.yearBuilt ?? "Unknown"}</strong>
-                </span>
-                <span>
-                  Storm
-                  <strong>
-                    {property.stormExposure?.hailInches
-                      ? `${property.stormExposure.hailInches}" hail`
-                      : property.stormExposure?.windMph
-                        ? `${property.stormExposure.windMph} mph`
-                        : "None"}
-                  </strong>
-                </span>
-                <span>
-                  Confidence<strong>{property.confidence ?? "—"}</strong>
-                </span>
-              </div>
+              <p>{property.city}, {property.state} {property.zip}</p>
               <div className="open-intel">OPEN + INSPECT →</div>
             </div>
           </button>
