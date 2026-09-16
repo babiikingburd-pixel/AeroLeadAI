@@ -4,22 +4,20 @@
 // multiple headings, and multiple pitches so roofline is actually visible
 // looking up, not just flat street-level shots).
 //
-// Provider fallback: tries Nearmap (if NEARMAP_API_KEY set, premium/highest
-// recency) -> Google (if GOOGLE_MAPS_API_KEY set) -> Mapbox (if MAPBOX_TOKEN
-// set) -> Esri World Imagery (free, no key, always available) in order,
-// moving to the next provider only if the current one's overview shots both
-// fail outright (quota exceeded, network error, etc). Whole providers are
-// swapped rather than mixing angle sources mid-response, so a single
-// response is never a patchwork of different providers' zoom levels.
+// Default (paid != true): stored private images or free Esri World Imagery
+// only. Nearmap, Google, and Mapbox never run unless the request explicitly
+// sets paid=true / paid=1. Street View is part of that paid path.
+//
+// When paid=true, provider fallback is Nearmap (if NEARMAP_API_KEY) ->
+// Google (if GOOGLE_MAPS_API_KEY) -> Mapbox (if MAPBOX_TOKEN) -> Esri.
+// Whole providers are swapped rather than mixing angle sources mid-response.
 //
 // `historical: true` additionally queries Planet (PLANET_API_KEY) for
 // date-stamped archive imagery — Google Static/Mapbox/Esri only ever serve
-// CURRENT imagery, so true before/after needs a provider that actually
-// timestamps its tiles. Honestly reports "unavailable" rather than faking a
-// comparison when no historical-capable provider is configured.
+// CURRENT imagery. Historical search is also paid-gated.
 //
-// `lite: true` skips the Street View sweep (used by high-volume batch/
-// background scanning where only the overhead shot is needed) for speed.
+// `lite: true` skips the Street View sweep. Unpaid requests force lite so a
+// caller cannot get Street View by omitting paid and setting lite=false.
 //
 // Two-layer caching: a fast in-memory cache (30 min) plus compact Supabase
 // manifests (30 days). Image bytes are stored in the private property-images
@@ -31,6 +29,7 @@ import { cacheGet, cacheSet } from "../../../lib/serverCache";
 import { isValidLatLon } from "../../../lib/validate";
 import { supabaseServer } from "../../../lib/supabaseServer";
 import { persistImageryAngles, removeStoragePaths, signedPathsToDataUrls } from "../../../lib/imagery/privateStorage.mjs";
+import { cacheUsableForRequest, isPaidRequest, providerPlan, publicImageryPayload } from "../../../lib/imagery/paidGate";
 export const dynamic = "force-dynamic";
 
 const CACHE_TTL_MS = 30 * 24 * 3600 * 1000; // satellite/street imagery doesn't change often
@@ -39,6 +38,10 @@ const CACHE_HISTORY_LIMIT = 3;
 
 function cacheKeyFor(lat, lon) {
   return `${Number(lat).toFixed(5)},${Number(lon).toFixed(5)}`;
+}
+
+function memoryKey(lat, lon, paid, lite, propertyId) {
+  return `img:${(+lat).toFixed(5)},${(+lon).toFixed(5)}:${paid ? "paid" : "free"}:${lite ? "lite" : "full"}:${propertyId}`;
 }
 
 async function readCache(supabase, key) {
@@ -64,7 +67,30 @@ async function writeCache(supabase, key, lat, lon, payload, propertyId) {
     angles: payload.angles,
     capturedAt: fetchedAt,
   });
-  if (!Object.keys(stored.storagePaths).length) return;
+  if (!Object.keys(stored.storagePaths).length) return null;
+
+  const qualityScore = payload.provider === "nearmap"
+    ? 95
+    : payload.provider === "google"
+      ? 90
+      : payload.provider === "mapbox"
+        ? 84
+        : 72;
+  const images = Object.entries(stored.storagePaths).map(([view, storagePath]) => ({
+    property_id: propertyId ? String(propertyId) : null,
+    provider: payload.provider || null,
+    view,
+    storage_path: storagePath,
+    mime_type: stored.mimeTypes[view] || "image/jpeg",
+    content_hash: stored.contentHashes[view] || null,
+    byte_size: stored.byteSizes[view] || null,
+    quality_score: qualityScore,
+    fetched_at: fetchedAt,
+  }));
+  const preferred = images.find((image) => image.view === "overview_tight")
+    || images.find((image) => image.view === "overview_context")
+    || images[0]
+    || null;
 
   const record = {
     cache_key: key,
@@ -82,40 +108,44 @@ async function writeCache(supabase, key, lat, lon, payload, propertyId) {
     fetched_at: fetchedAt,
   };
   const { error: cacheError } = await supabase.from("imagery_manifests").upsert(record, { onConflict: "cache_key" });
-  if (cacheError) throw cacheError;
-  const { error: historyError } = await supabase.from("imagery_manifest_history").insert(record);
-  if (historyError) throw historyError;
+  if (cacheError) console.warn("[imagery-agent] optional manifest write skipped", cacheError.message);
+  const historyResult = await supabase.from("imagery_manifest_history").insert(record);
+  if (historyResult.error) console.warn("[imagery-agent] optional history write skipped", historyResult.error.message);
 
   if (propertyId) {
-    const imageRows = Object.entries(stored.storagePaths).map(([view, storagePath]) => ({
-      property_id: String(propertyId),
-      provider: payload.provider || null,
-      view,
-      image_kind: view.startsWith("vantage") ? "street_view" : "property_overview",
-      storage_path: storagePath,
+    const imageRows = images.map((image) => ({
+      property_id: image.property_id,
+      provider: image.provider,
+      view: image.view,
+      image_kind: image.view.startsWith("vantage") ? "street_view" : "property_overview",
+      storage_path: image.storage_path,
       image_url: null,
-      quality_score: payload.provider === "nearmap" ? 95 : payload.provider === "google" ? 90 : payload.provider === "mapbox" ? 84 : 72,
+      quality_score: image.quality_score,
       evidence_status: "fetched",
-      fetched_at: fetchedAt,
-      content_hash: stored.contentHashes[view] || null,
-      byte_size: stored.byteSizes[view] || null,
-      mime_type: stored.mimeTypes[view] || null,
+      fetched_at: image.fetched_at,
+      content_hash: image.content_hash,
+      byte_size: image.byte_size,
+      mime_type: image.mime_type,
     }));
     const { error: imageError } = await supabase.from("property_images").upsert(imageRows, { onConflict: "property_id,view" });
-    if (imageError) console.warn("[imagery-agent] property image metadata write failed", imageError.message);
+    if (imageError) console.warn("[imagery-agent] optional legacy property image metadata skipped", imageError.message);
   }
 
-  const { data: historyRows, error: historyReadError } = await supabase
-    .from("imagery_manifest_history")
-    .select("id,storage_paths,fetched_at")
-    .eq("cache_key", key)
-    .order("fetched_at", { ascending: false })
-    .limit(20);
-  if (!historyReadError && (historyRows || []).length > CACHE_HISTORY_LIMIT) {
-    const expired = historyRows.slice(CACHE_HISTORY_LIMIT);
-    await removeStoragePaths(supabase, expired).catch((error) => console.warn("[imagery-agent] history storage cleanup failed", error.message));
-    await supabase.from("imagery_manifest_history").delete().in("id", expired.map((row) => row.id));
+  if (!historyResult.error) {
+    const { data: historyRows, error: historyReadError } = await supabase
+      .from("imagery_manifest_history")
+      .select("id,storage_paths,fetched_at")
+      .eq("cache_key", key)
+      .order("fetched_at", { ascending: false })
+      .limit(20);
+    if (!historyReadError && (historyRows || []).length > CACHE_HISTORY_LIMIT) {
+      const expired = historyRows.slice(CACHE_HISTORY_LIMIT);
+      await removeStoragePaths(supabase, expired).catch((error) => console.warn("[imagery-agent] history storage cleanup failed", error.message));
+      await supabase.from("imagery_manifest_history").delete().in("id", expired.map((row) => row.id));
+    }
   }
+
+  return { propertyId: propertyId ? String(propertyId) : null, provider: payload.provider || null, fetchedAt, images, preferred };
 }
 
 function bearingBetween(lat1, lon1, lat2, lon2) {
@@ -136,10 +166,6 @@ function destPoint(lat, lon, bearingDeg, distanceM) {
   return { lat: toDeg(lat2), lon: toDeg(lon2) };
 }
 
-// Standard Web Mercator ground resolution formula (256px base tile), divided
-// by `scale` for retina/@2x requests. This is the real, honest number —
-// unlike capture date, resolution IS derivable from the request parameters
-// themselves for tile-based providers.
 function metersPerPixelMercator(lat, zoom, scale = 1) {
   return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / (2 ** zoom * scale);
 }
@@ -174,18 +200,9 @@ async function getStreetViewMeta(lat, lon, key) {
   return null;
 }
 
-// Try Esri's free World Imagery export — no key, no signup, always
-// available as the final fallback. Quality/recency varies vs paid
-// providers and there's no street-view equivalent.
 async function tryEsri(lat, lon) {
   const result = { angles: {}, resolution: {}, notes: [] };
-  // Verified against the live endpoint: below ~0.0007 degrees ArcGIS
-  // rejects the export outright with a 500 ("Error: bytes") — the bbox is
-  // too small relative to the 640x640 output size. 0.0008 is the smallest
-  // delta confirmed to reliably return a real image; this "tight" shot was
-  // silently failing every call at the old 0.0004 and falling through to
-  // the context shot only.
-  const d = 0.0008, dCtx = 0.0015; // tight parcel view (~180m box), wider context view
+  const d = 0.0008, dCtx = 0.0015;
   const esri = (delta) => `https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${lon - delta},${lat - delta},${lon + delta},${lat + delta}&bboxSR=4326&imageSR=3857&size=640,640&format=jpg&compressionQuality=70&f=image`;
   const mppFor = (delta) => haversineMeters(lat - delta, lon, lat + delta, lon) / 640;
   const tight = await fetchAsDataUrl(esri(d), 2);
@@ -201,13 +218,10 @@ async function tryEsri(lat, lon) {
   if (!tight && !ctx) return null;
   result.provider = "esri-free";
   result.dataUrl = tight || ctx;
-  result.notes.push("Using Esri World Imagery free tier. Add GOOGLE_MAPS_API_KEY or MAPBOX_TOKEN for higher-recency imagery plus a street-view sweep.");
+  result.notes.push("Using Esri World Imagery free tier. Paid Street View / Nearmap / Mapbox run only after an explicit paid=true request.");
   return result;
 }
 
-// Premium tier: Nearmap (highest recency/resolution). Optional — only
-// attempted when NEARMAP_API_KEY is set. Overview only, no street-view
-// equivalent, so Street View still comes from Google if that key is also set.
 async function tryNearmap(lat, lon, nearmapKey) {
   const url = `https://api.nearmap.com/staticmap/v2/${lon},${lat}.jpg?zoom=21&size=640x640&apikey=${nearmapKey}`;
   const img = await fetchAsDataUrl(url, 1);
@@ -224,7 +238,7 @@ async function tryGoogle(lat, lon, googleKey, lite) {
 
   const tight = await fetchAsDataUrl(tightUrl, 1);
   const context = await fetchAsDataUrl(contextUrl, 1);
-  if (!tight && !context) return null; // total provider failure -> let caller fall back
+  if (!tight && !context) return null;
 
   if (tight) { result.angles.overview_tight = tight; result.resolution.overview_tight = { source: "google", zoom: zoomTight, metersPerPixel: metersPerPixelMercator(lat, zoomTight, scale) }; }
   else result.notes.push("Tight overview fetch failed.");
@@ -270,7 +284,7 @@ async function tryGoogle(lat, lon, googleKey, lite) {
           if (img) {
             const key = `vantage${panoIndex}_${s.label}`;
             result.angles[key] = img;
-            result.sweep.push({ key, panoId, heading: Math.round(s.heading), pitch: s.pitch, vantageLat: pano.lat, vantageLon: pano.lon });
+            result.sweep.push({ key, panoId, heading: Math.round(s.heading), pitch: s.pitch, vantageLat: pano.lat, vantageLon: pano.lon, bearingToProperty: headingToTarget });
           }
         }
       }
@@ -304,12 +318,6 @@ async function tryMapbox(lat, lon, mapboxKey) {
   return result;
 }
 
-// Provider-side historical archive query (Planet) — distinct from our OWN
-// compact manifest history above: this asks the imagery VENDOR for past dated
-// scenes, which is what makes a true "storm before/after" comparison
-// possible without having already been polling this address for months.
-// Sentinel Hub is documented as a future option but not wired to actual
-// tile fetch in this build (OAuth-only) — reported honestly, not faked.
 async function fetchHistorical(lat, lon, planetKey, sentinelId, sentinelSecret) {
   if (planetKey) {
     try {
@@ -342,7 +350,42 @@ async function fetchHistorical(lat, lon, planetKey, sentinelId, sentinelSecret) 
   return { available: false, providersNote: "Historical comparison needs PLANET_API_KEY (or Sentinel Hub credentials) — Google/Mapbox/Esri only serve current imagery." };
 }
 
-// History lookup for before/after comparison: GET /api/imagery-agent?lat=..&lon=..
+function runnerFor(id, lat, lon, keys, lite) {
+  if (id === "nearmap") return () => tryNearmap(lat, lon, keys.nearmap);
+  if (id === "google") return () => tryGoogle(lat, lon, keys.google, lite);
+  if (id === "mapbox") return () => tryMapbox(lat, lon, keys.mapbox);
+  return () => tryEsri(lat, lon);
+}
+
+function cachedPayload(cached) {
+  const storedImages = Object.entries(cached.storage_paths || {}).map(([view, storagePath]) => ({
+    property_id: cached.property_id || null,
+    provider: cached.provider || null,
+    view,
+    storage_path: storagePath,
+    mime_type: cached.mime_types?.[view] || "image/jpeg",
+    content_hash: cached.content_hashes?.[view] || null,
+    byte_size: cached.byte_sizes?.[view] || null,
+    quality_score: cached.provider === "nearmap" ? 95 : cached.provider === "google" ? 90 : cached.provider === "mapbox" ? 84 : 72,
+    fetched_at: cached.fetched_at,
+  }));
+  return {
+    angles: cached.angles || {}, sweep: cached.sweep || [], notes: [`Served from cache (fetched ${cached.fetched_at}).`],
+    resolution: cached.resolution || {}, provider: cached.provider, dataUrl: (cached.angles || {}).overview_tight || null,
+    capturedDate: null, cached: true, cacheSource: "supabase", cachedAt: cached.fetched_at,
+    stored: {
+      propertyId: cached.property_id || null,
+      provider: cached.provider || null,
+      fetchedAt: cached.fetched_at,
+      images: storedImages,
+      preferred: storedImages.find((image) => image.view === "overview_tight")
+        || storedImages.find((image) => image.view === "overview_context")
+        || storedImages[0]
+        || null,
+    },
+  };
+}
+
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const lat = searchParams.get("lat"), lon = searchParams.get("lon");
@@ -358,7 +401,7 @@ export async function GET(req) {
       .order("fetched_at", { ascending: false })
       .limit(CACHE_HISTORY_LIMIT);
     if (error) throw error;
-    const snapshots = await Promise.all((rows || []).map(async (row) => ({ ...row, angles: await signedPathsToDataUrls(supabase, row.storage_paths || {}) })));
+    const snapshots = await Promise.all((rows || []).map(async (row) => publicImageryPayload({ ...row, angles: await signedPathsToDataUrls(supabase, row.storage_paths || {}) })));
     return Response.json({ ok: true, snapshots, retention: CACHE_HISTORY_LIMIT, storage: "private-object-storage" });
   } catch (e) {
     return Response.json({ ok: false, error: e.message });
@@ -366,13 +409,19 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
-  const { lat, lon, force, lite, historical, leadId, propertyId } = await req.json();
+  const body = await req.json();
+  const { lat, lon, force, lite: requestedLite, historical, leadId, propertyId, paid: paidRaw } = body;
   if (!isValidLatLon(lat, lon)) return Response.json({ error: "Valid lat/lon required" }, { status: 400 });
 
-  const memKey = `img:${(+lat).toFixed(5)},${(+lon).toFixed(5)}:${lite ? "lite" : "full"}`;
+  const paid = isPaidRequest(paidRaw);
+  const lite = paid ? Boolean(requestedLite) : true;
+  const requestedPropertyId = leadId || propertyId || "anonymous";
+  const memKey = memoryKey(lat, lon, paid, lite, requestedPropertyId);
   if (!force) {
     const mem = cacheGet(memKey);
-    if (mem) return Response.json({ ...mem, cached: true, cacheSource: "memory" });
+    if (mem && cacheUsableForRequest(mem, { paid, lite })) {
+      return Response.json(publicImageryPayload({ ...mem, cached: true, cacheSource: "memory" }, { paid }));
+    }
   }
 
   const supabase = supabaseServer();
@@ -380,54 +429,52 @@ export async function POST(req) {
 
   if (supabase && !force) {
     const cached = await readCache(supabase, key);
-    if (cached) {
-      const payload = {
-        angles: cached.angles || {}, sweep: [], notes: [`Served from cache (fetched ${cached.fetched_at}).`],
-        resolution: cached.resolution || {}, provider: cached.provider, dataUrl: (cached.angles || {}).overview_tight || null,
-        capturedDate: null, cached: true, cacheSource: "supabase", cachedAt: cached.fetched_at,
-      };
+    if (cached && cacheUsableForRequest(cached, { paid, lite })) {
+      const payload = cachedPayload(cached);
       cacheSet(memKey, payload, MEM_CACHE_TTL_MS);
-      return Response.json(payload);
+      return Response.json(publicImageryPayload(payload, { paid }));
     }
   }
 
-  const nearmapKey = process.env.NEARMAP_API_KEY;
-  const googleKey = process.env.GOOGLE_MAPS_API_KEY;
-  const mapboxKey = process.env.MAPBOX_TOKEN;
+  const keys = {
+    nearmap: process.env.NEARMAP_API_KEY,
+    google: process.env.GOOGLE_MAPS_API_KEY,
+    mapbox: process.env.MAPBOX_TOKEN,
+  };
   const planetKey = process.env.PLANET_API_KEY;
   const sentinelId = process.env.SENTINEL_HUB_CLIENT_ID;
   const sentinelSecret = process.env.SENTINEL_HUB_CLIENT_SECRET;
 
+  const plan = providerPlan({ paid, keys });
   let payload = null;
-  const attempts = [];
-  if (nearmapKey) attempts.push(() => tryNearmap(lat, lon, nearmapKey));
-  if (googleKey) attempts.push(() => tryGoogle(lat, lon, googleKey, lite));
-  if (mapboxKey) attempts.push(() => tryMapbox(lat, lon, mapboxKey));
-  attempts.push(() => tryEsri(lat, lon)); // always last — free, keyless, guaranteed available
-
   const triedProviders = [];
-  for (const attempt of attempts) {
-    const r = await attempt();
-    if (r) { payload = r; break; }
-    triedProviders.push("failed");
+  for (const step of plan) {
+    const result = await runnerFor(step.id, lat, lon, keys, lite)();
+    if (result) { payload = result; break; }
+    triedProviders.push(step.id);
   }
 
   if (!payload) {
-    return Response.json({ error: "All imagery providers failed", notes: "All configured providers (and the Esri free fallback) were unreachable or returned no image for these coordinates." }, { status: 200 });
+    return Response.json({ error: "All imagery providers failed", notes: paid ? "Paid providers and the Esri free fallback were unreachable." : "Esri World Imagery was unreachable for these coordinates.", paid }, { status: 200 });
   }
   if (triedProviders.length) {
     payload.notes.unshift(`Fell back to ${payload.provider} after ${triedProviders.length} provider(s) failed.`);
   }
-  payload.capturedDate = null; // honest gap: none of these static-tile APIs expose per-image capture date
+  payload.capturedDate = null;
   payload.cached = false;
+  payload.paid = paid;
+  payload.plan = plan.map((step) => step.id);
 
   if (historical) {
-    payload.historical = await fetchHistorical(lat, lon, planetKey, sentinelId, sentinelSecret);
+    payload.historical = paid
+      ? await fetchHistorical(lat, lon, planetKey, sentinelId, sentinelSecret)
+      : { available: false, providersNote: "Historical Planet/Sentinel search requires paid=true." };
   }
 
   if (supabase) {
     try {
-      await writeCache(supabase, key, lat, lon, payload, leadId || propertyId || null);
+      const stored = await writeCache(supabase, key, lat, lon, payload, leadId || propertyId || null);
+      if (stored) payload.stored = stored;
     } catch (error) {
       console.warn("[imagery-agent] compact persistence failed", error.message);
       payload.notes.push("Imagery was returned, but compact private-storage persistence failed for this request.");
@@ -435,5 +482,5 @@ export async function POST(req) {
   }
   cacheSet(memKey, payload, MEM_CACHE_TTL_MS);
 
-  return Response.json(payload);
+  return Response.json(publicImageryPayload(payload, { paid }));
 }
