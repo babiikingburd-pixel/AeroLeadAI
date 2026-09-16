@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import "./apex.css";
+import "./inspect.css";
+import PropertyIntelligence from "./PropertyIntelligence";
 
 export default function ApexGridPage() {
   const [payload, setPayload] = useState(null);
@@ -9,6 +11,7 @@ export default function ApexGridPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [contractor, setContractor] = useState("apex roofing");
+  const [draft, setDraft] = useState("apex roofing");
 
   const load = useCallback(async (name) => {
     setLoading(true);
@@ -48,14 +51,14 @@ export default function ApexGridPage() {
           <p>
             {payload?.contractor?.businessName
               ? `${payload.contractor.businessName} · ${(payload.territory || []).join(", ")}`
-              : "Live territory scoring from batch_leads"}
+              : "Territory scoring from batch_leads"}
           </p>
           {payload?.generatedAt && (
             <p className="timestamp">
               Live read {new Date(payload.generatedAt).toLocaleString()} ·{" "}
               {payload.eagleView?.configured
                 ? `EagleView ${payload.eagleView.environment} (${payload.eagleView.authMode})`
-                : "EagleView not configured — Esri imagery fallback"}
+                : "EagleView not configured — imagery on inspect"}
             </p>
           )}
         </div>
@@ -71,16 +74,26 @@ export default function ApexGridPage() {
         <label htmlFor="contractor-input">Contractor</label>
         <input
           id="contractor-input"
-          defaultValue={contractor}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") setContractor(e.currentTarget.value.trim());
+            if (e.key === "Enter") setContractor(draft.trim() || "apex roofing");
           }}
           placeholder="apex roofing"
         />
-        <button onClick={() => load(contractor)} disabled={loading}>
+        <button
+          onClick={() => {
+            const name = draft.trim() || "apex roofing";
+            setContractor(name);
+            load(name);
+          }}
+          disabled={loading}
+        >
           {loading ? "Scanning…" : "Refresh"}
         </button>
-        <a className="back-link" href="/twincities/contractor-prospects">← Contractor Prospect Bench</a>
+        <a className="back-link" href="/twincities/contractor-prospects">
+          ← Contractor Prospect Bench
+        </a>
       </div>
 
       {loading && <div className="loading">Reading live APEX scores…</div>}
@@ -106,27 +119,48 @@ export default function ApexGridPage() {
               {property.imagery?.url ? (
                 <img src={property.imagery.url} alt={property.address} loading="lazy" />
               ) : (
-                <div className="no-image"><span>—</span><small>No imagery</small></div>
+                <div className="no-image">
+                  <span>—</span>
+                  <small>Open to inspect</small>
+                </div>
               )}
-
               <div className={`score score-${scoreClass(property.score)}`}>{property.score ?? "—"}</div>
               <div className={`imagery-tag tag-${property.imagery?.source}`}>
-                {property.imagery?.source === "eagleview" ? "EAGLEVIEW" : property.imagery?.source === "esri" ? "ESRI" : "NO IMAGE"}
+                {property.imagery?.source === "eagleview"
+                  ? "EAGLEVIEW"
+                  : property.imagery?.source === "esri"
+                    ? "ESRI"
+                    : "NO IMAGE"}
               </div>
             </div>
-
             <div className="card-body">
-              <div className="rank">#{property.displayIndex}{property.tier === "top500" && <em> · TOP500</em>}</div>
-              <h3>{property.address}</h3>
-              <p>{property.city}, {property.state} {property.zip}</p>
-
-              <div className="mini-data">
-                <span>Built<strong>{property.yearBuilt ?? "Unknown"}</strong></span>
-                <span>Storm<strong>{property.stormExposure?.hailInches ? `${property.stormExposure.hailInches}" hail` : property.stormExposure?.windMph ? `${property.stormExposure.windMph} mph` : "None"}</strong></span>
-                <span>Confidence<strong>{property.confidence ?? "—"}</strong></span>
+              <div className="rank">
+                #{property.displayIndex}
+                {property.tier === "top500" && <em> · TOP500</em>}
               </div>
-
-              <div className="open-intel">OPEN PROPERTY INTELLIGENCE →</div>
+              <h3>{property.address}</h3>
+              <p>
+                {property.city}, {property.state} {property.zip}
+              </p>
+              <div className="mini-data">
+                <span>
+                  Built<strong>{property.yearBuilt ?? "Unknown"}</strong>
+                </span>
+                <span>
+                  Storm
+                  <strong>
+                    {property.stormExposure?.hailInches
+                      ? `${property.stormExposure.hailInches}" hail`
+                      : property.stormExposure?.windMph
+                        ? `${property.stormExposure.windMph} mph`
+                        : "None"}
+                  </strong>
+                </span>
+                <span>
+                  Confidence<strong>{property.confidence ?? "—"}</strong>
+                </span>
+              </div>
+              <div className="open-intel">OPEN + INSPECT →</div>
             </div>
           </button>
         ))}
@@ -137,58 +171,13 @@ export default function ApexGridPage() {
   );
 }
 
-function PropertyIntelligence({ property, onClose }) {
+function Stat({ label, value }) {
   return (
-    <div className="intel-overlay" onClick={onClose}>
-      <div className="intel-panel" onClick={(e) => e.stopPropagation()}>
-        <button className="close" onClick={onClose}>✕</button>
-        <div className="intel-head">
-          <h2>{property.address}</h2>
-          <p>{property.city}, {property.state} {property.zip}{property.county ? ` · ${property.county} County` : ""}</p>
-        </div>
-
-        {property.imagery?.url && (
-          <figure className="intel-image">
-            <img src={property.imagery.url} alt={property.address} />
-            <figcaption>{property.imagery.attribution}</figcaption>
-          </figure>
-        )}
-
-        <div className="intel-grid">
-          <Field label="APEX score" value={property.score} />
-          <Field label="Tier" value={property.tier} />
-          <Field label="Confidence" value={property.confidence} />
-          <Field label="Year built" value={property.yearBuilt} />
-          <Field label="Assessed value" value={property.assessedValue ? `$${property.assessedValue.toLocaleString()}` : null} />
-          <Field label="Permit evidence" value={property.permit?.status} />
-        </div>
-
-        <div className="intel-block"><h4>Roof age</h4><p>{property.roofAgeEstimate}</p></div>
-        <div className="intel-block">
-          <h4>Storm exposure</h4><p>{property.stormExposure?.label}</p>
-          {property.stormExposure?.stormDate && <p className="muted">Recorded {property.stormExposure.stormDate}</p>}
-        </div>
-
-        {property.reasons?.length > 0 && (
-          <div className="intel-block">
-            <h4>Scoring contributions</h4>
-            <ul className="reasons">
-              {property.reasons.map((r, i) => <li key={i}><span>{r.label}</span>{r.contribution != null && <strong>{String(r.contribution)}</strong>}</li>)}
-            </ul>
-          </div>
-        )}
-
-        <p className="disclaimer">Scores indicate inspection priority based on recorded property and storm signals. They are not a claim of confirmed roof damage.</p>
-      </div>
+    <div className="stat">
+      <div className="stat-value">{value}</div>
+      <div className="stat-label">{label}</div>
     </div>
   );
-}
-
-function Field({ label, value }) {
-  return <div className="field"><span>{label}</span><strong>{value ?? "—"}</strong></div>;
-}
-function Stat({ label, value }) {
-  return <div className="stat"><div className="stat-value">{value}</div><div className="stat-label">{label}</div></div>;
 }
 function scoreClass(score) {
   if (score == null) return "none";
